@@ -4,7 +4,7 @@ import threading
 from http.server import ThreadingHTTPServer
 from urllib import request as urlreq
 
-from deepseek_multi_agent_plugin.adapter_server import AdapterHandler, register_demo_agents
+from deepseek_multi_agent_plugin.adapter_server import AdapterHandler, build_server, register_demo_agents
 from deepseek_multi_agent_plugin.coordinator import AgentCoordinator, DeepseekAdapter
 
 
@@ -146,3 +146,16 @@ def test_not_found():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_build_server_shuts_down_cleanly():
+    coord = AgentCoordinator()
+    register_demo_agents(coord)
+    server = build_server("127.0.0.1", 0, coord)
+    assert server.daemon_threads is True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=3)
+    assert not thread.is_alive()

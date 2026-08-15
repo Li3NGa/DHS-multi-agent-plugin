@@ -1,0 +1,26 @@
+services:
+  deepseek-multi-agent-plugin:
+    build: .
+    container_name: deepseek-multi-agent-plugin
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      CONFIG: /app/example_config.yaml
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DS_AGENT_TOKEN: ${DS_AGENT_TOKEN:-}
+    volumes:
+      - ./example_config.yaml:/app/example_config.yaml:ro
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; p=os.environ.get('PORT','8000'); t=os.environ.get('DS_AGENT_TOKEN',''); req=urllib.request.Request('http://127.0.0.1:'+p+'/health', headers={'Authorization':'Bearer '+t}); urllib.request.urlopen(req, timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -7,7 +7,7 @@ supervisor or consensus. An HTTP adapter server and a CLI make the plugin
 easy to drive from the DeepSeek Harness or any other caller.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .agents import Agent, AgentFactory, chat_completion
 from .config import build_coordinator, load_config

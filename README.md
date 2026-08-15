@@ -216,6 +216,16 @@ result = adapter.handle_harness_event({
 | [协作策略详解](docs/strategies.md) | 5 种策略的流程、参数、返回结构、选型建议 |
 | [Python API 参考](docs/api_reference.md) | 全部类与函数的签名、参数、返回值 |
 | [HTTP 服务接口](docs/http_api.md) | 四个端点的请求/响应协议、curl 示例、安全建议 |
+| [部署指南](docs/deployment.md) | Windows / Docker / systemd 三种部署方式、健康检查、优雅关闭与安全建议 |
+
+### Docker 部署 / Docker deployment
+
+```bash
+docker compose up -d --build
+```
+
+镜像通过 `HOST`、`PORT`、`CONFIG`、`DEEPSEEK_API_KEY`、`DS_AGENT_TOKEN`
+环境变量配置，健康检查与完整部署说明见 [docs/deployment.md](docs/deployment.md)。
 
 可直接运行的示例代码在 [examples/](examples/)：
 

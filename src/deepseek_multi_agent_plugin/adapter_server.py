@@ -25,6 +25,8 @@ import argparse
 import json
 import logging
 import os
+import signal
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from typing import Callable, Dict, Optional, Tuple
@@ -142,6 +144,28 @@ def register_demo_agents(coordinator: AgentCoordinator) -> None:
     )
 
 
+def build_server(
+    host: str,
+    port: int,
+    coordinator: AgentCoordinator,
+    token: Optional[str] = None,
+    session_factory: Optional[Callable[[], AgentCoordinator]] = None,
+) -> ThreadingHTTPServer:
+    """Create a configured adapter server without starting it.
+
+    Exposed separately so tests and embedders can attach an already-running
+    server (e.g. to verify graceful shutdown without blocking a thread).
+    """
+    server = ThreadingHTTPServer((host, port), AdapterHandler)
+    # Hung agent calls must not keep the container alive forever during
+    # graceful shutdown; daemon threads let ``server_close`` return promptly.
+    server.daemon_threads = True
+    registry = SessionRegistry(factory=session_factory) if session_factory else None
+    server.adapter = DeepseekAdapter(coordinator, registry=registry)
+    server.auth_token = token
+    return server
+
+
 def serve(
     host: str,
     port: int,
@@ -149,14 +173,27 @@ def serve(
     token: Optional[str] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
 ) -> None:
-    server = ThreadingHTTPServer((host, port), AdapterHandler)
-    registry = SessionRegistry(factory=session_factory) if session_factory else None
-    server.adapter = DeepseekAdapter(coordinator, registry=registry)
-    server.auth_token = token
+    server = build_server(host, port, coordinator, token=token, session_factory=session_factory)
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
              host, port, coordinator.agent_names,
              "on" if token else "off",
              "on" if session_factory else "off")
+
+    def _shutdown_handler(signum, frame):  # noqa: ARG001 - signal API
+        log.info("received signal %s, shutting down gracefully", signum)
+        # ``shutdown`` must run outside the signal handler (it blocks until
+        # serve_forever returns), so hand it to a short-lived daemon thread.
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    if threading.current_thread() is threading.main_thread():
+        for sig_name in ("SIGTERM", "SIGINT"):
+            sig = getattr(signal, sig_name, None)
+            if sig is not None:
+                try:
+                    signal.signal(sig, _shutdown_handler)
+                except (ValueError, OSError):
+                    # Not the main thread or unsupported signal; skip.
+                    pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

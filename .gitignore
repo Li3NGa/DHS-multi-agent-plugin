@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.Python
+
+# Distribution
+build/
+dist/
+*.egg-info/
+
+# Pytest
+.pytest_cache/
+
+# VSCode
+.vscode/
+
+# Local env
+.env
+
+# Logs
+*.log

@@ -1,0 +1,14 @@
+# Example configuration for deepseek-multi-agent-plugin
+plugin:
+  name: deepseek-multi-agent-plugin
+  version: 0.1.0
+
+coordinator:
+  rounds: 3
+  timeout_seconds: 10
+
+agents:
+  - name: agent_alpha
+    type: mock
+  - name: agent_beta
+    type: mock

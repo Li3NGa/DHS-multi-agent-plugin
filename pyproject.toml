@@ -1,0 +1,18 @@
+[project]
+name = "deepseek-multi-agent-plugin"
+version = "0.1.0"
+description = "Multi-agent coordination plugin with a Deepseek harness adapter"
+authors = [ { name = "Your Name" } ]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+deepseek-plugin-runner = "deepseek_multi_agent_plugin.adapter_server:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

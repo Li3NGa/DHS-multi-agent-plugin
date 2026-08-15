@@ -1,10 +1,10 @@
 # deepseek-multi-agent-plugin
 
-多智能体协同插件：定义一支 Agent 团队（DeepSeek / OpenAI 兼容 LLM、HTTP 服务或纯 Python 逻辑），
+多智能体协同插件：定义一支 Agent 团队（DeepSeek / OpenAI 兼容 LLM、HTTP 服务、外部 CLI 命令或纯 Python 逻辑），
 再用内置的协作策略（广播、流水线、辩论、主管-下属、共识投票）让它们一起完成任务。
 
 A multi-agent collaboration plugin for the DeepSeek ecosystem: define a team of agents
-(DeepSeek/OpenAI-compatible LLMs, HTTP services or plain Python handlers) and run them
+(DeepSeek/OpenAI-compatible LLMs, HTTP services, external CLI commands or plain Python handlers) and run them
 together with built-in collaboration strategies: `broadcast`, `sequential`, `debate`,
 `supervisor` and `consensus`.
 
@@ -19,7 +19,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 ## 特性 / Features
 
 - **6 种开箱即用的协作策略**：广播讨论、顺序流水线（chain-of-agents）、多轮辩论（含裁判）、主管-下属（任务分解与并行执行）、提案-投票共识、接力迭代（草稿打磨）。
-- **灵活的 Agent 定义**：`mock` / `echo` / `http` / `deepseek` / `openai` / `custom` 六种后端，LLM 调用仅依赖标准库（OpenAI 兼容 `/chat/completions` 协议）。
+- **灵活的 Agent 定义**：`mock` / `echo` / `http` / `deepseek` / `openai` / `custom` / `cli` 七种后端，LLM 调用仅依赖标准库（OpenAI 兼容 `/chat/completions` 协议）。
 - **共享对话记忆**：所有策略共享一个线程安全的 `MessageStore`，每个 Agent 都能看到讨论全程；辩论上下文带发言人标签（`[agent]: ...`），LLM 能分清谁说了什么。
 - **会话隔离**：事件可携带 `session_id`，每个会话获得独立的 Agent 注册表与对话记忆，并发任务互不污染。
 - **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作；超时不再阻塞等待慢 Agent；LLM 调用对 429/5xx 与网络抖动自动指数退避重试。
@@ -99,6 +99,7 @@ deepseek-multi-agent serve --config example_config.yaml --port 8000
 | `deepseek` | DeepSeek 官方 API（OpenAI 兼容协议） | `api_key` 或环境变量 `DEEPSEEK_API_KEY` |
 | `openai` | 任意 OpenAI 兼容端点 | `api_key` 或环境变量 `OPENAI_API_KEY` |
 | `custom` | 任意 Python 可调用对象 | `handler` |
+| `cli` | 调用外部命令行程序（如 codex exec），消息作为最后一个参数 | `command` |
 
 LLM Agent 还支持 `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`base_url` 等参数。
 

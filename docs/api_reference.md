@@ -81,6 +81,7 @@ AgentFactory.from_configs(configs: list[dict]) -> list[Agent]
 | `http` | `url`（必填）、`timeout`（默认 5） | POST `{"message": msg}` 到端点，返回解析后的 JSON 或文本 |
 | `deepseek` / `openai` | `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`api_key`、`base_url`、`timeout` | LLM Agent |
 | `custom` | `handler`（必填，可调用对象） | 任意 Python 逻辑 |
+| `cli` | `command`（必填）、`args`（默认 `[]`）、`timeout`（默认 300）、`cwd`、`encoding`（默认 `utf-8`） | 调用外部命令行 agent，消息作为最后一个参数传入 |
 
 `from_config` 中省略 `kind` 时：提供 `handler` 视为 `custom`，否则视为 `mock`。
 未知 kind → `ValueError`。

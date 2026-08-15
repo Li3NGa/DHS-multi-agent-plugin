@@ -94,7 +94,7 @@ agents:
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `name` | 是 | 唯一标识，出现在所有记录与内存中 |
-| `kind` | 否 | `mock` / `echo` / `http` / `deepseek` / `openai` / `custom`；省略时若提供 `handler` 则视为 `custom`，否则为 `mock` |
+| `kind` | 否 | `mock` / `echo` / `http` / `deepseek` / `openai` / `custom` / `cli`；省略时若提供 `handler` 则视为 `custom`，否则为 `mock` |
 | `role` | 否 | 角色描述（自由文本，仅作元信息） |
 | `system_prompt` | 否 | 系统提示词，每次 LLM 调用都会前置 |
 | `model` | 否 | 模型名，如 `deepseek-chat`、`deepseek-reasoner`、`gpt-4o-mini` |
@@ -102,10 +102,14 @@ agents:
 | `max_tokens` | 否 | 最大生成 token 数 |
 | `api_key` | 否 | 显式 API Key；缺省读环境变量（见第 8 节） |
 | `base_url` | 否 | 覆盖默认 API 地址（可指向任何 OpenAI 兼容端点） |
-| `timeout` | 否 | 单次 LLM 调用超时（秒，默认 60） |
+| `timeout` | 否 | 单次 LLM 调用超时（秒，默认 60）；cli agent 的子进程超时（秒，默认 300） |
 | `message_template` | mock 用 | 模板字符串，支持 `{msg}` 与 `{name}` 占位符 |
 | `url` | http 用 | 接收 `{"message": ...}` JSON 的端点地址 |
 | `handler` | custom 用 | Python 可调用对象（仅代码中可用，YAML 无法序列化） |
+| `command` | cli 用 | 可执行文件路径或 PATH 中的命令名（必填） |
+| `args` | cli 用 | 传给命令的参数列表（默认 `[]`，不含消息本身） |
+| `cwd` | cli 用 | 子进程工作目录（可选） |
+| `encoding` | cli 用 | stdout/stderr 解码编码（默认 `utf-8`） |
 
 ### 3.3 运行配置
 
@@ -145,7 +149,7 @@ deepseek-multi-agent run --prompt "任务描述" [选项]
 | 选项 | 说明 |
 | --- | --- |
 | `--prompt` | 任务提示词（必填） |
-| `--strategy` | `auto`（默认）/ `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` |
+| `--strategy` | `auto`（默认）/ `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` / `relay` |
 | `--rounds` | 轮数，默认 3 |
 | `--judge` | 裁判 Agent 名（debate/consensus） |
 | `--order` | 逗号分隔的发言顺序（sequential），如 `--order critic,researcher` |
@@ -290,7 +294,26 @@ agents:
 > 提示：`kind: deepseek` 与 `kind: openai` 走同一套 OpenAI 兼容协议，区别只是默认地址、
 > 默认模型和环境变量名。任何实现 `POST /chat/completions` 的服务都可以通过 `base_url` 接入。
 
-### 8.3 代码中直接构造 LLM Agent
+### 8.3 外部 agent CLI 桥接（kind: cli）
+
+任何能读取命令行参数并从 stdout 返回结果的外部程序（codex CLI、任意 CLI 工具）都可以
+作为团队一员：handler 会执行 `command + args + [消息]`，按退出码与输出返回内容。
+
+```yaml
+agents:
+  - name: codex_worker
+    kind: cli
+    command: C:/Users/admin/AppData/Local/OpenAI/Codex/bin/e305f1c75d8da435/codex.exe
+    args: [exec, --skip-git-repo-check]
+    timeout: 600
+```
+
+- 消息会作为最后一个参数追加，适合 `codex exec "<prompt>"` 这类一次性执行模式；
+- 退出码 0 且 stdout 非空时返回 stdout；stdout 为空则返回 stderr；非 0 退出码或超时会
+  记录为 `{"error": ...}`，不会中断协作；
+- `command` 也可以是 PATH 中的命令名（如 `codex`），`cwd` 可指定工作目录。
+
+### 8.4 代码中直接构造 LLM Agent
 
 ```python
 from deepseek_multi_agent_plugin import Agent
@@ -305,7 +328,7 @@ agent = Agent(
 )
 ```
 
-### 8.4 预算与速率提示
+### 8.5 预算与速率提示
 
 - 辩论 N 轮 × M 个 Agent ≈ M×N 次 LLM 调用，另加 1 次裁判调用；supervisor 为 2 次主管调用 + 工人调用。
 - 每轮辩论都会携带历史上下文，轮数过多时注意 token 消耗；`MessageStore` 可设 `capacity` 截断。

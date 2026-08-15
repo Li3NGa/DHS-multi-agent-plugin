@@ -7,13 +7,16 @@ prompt plus exactly one *backend*:
 * an LLM provider (deepseek / openai) called over HTTP with the
   OpenAI-compatible /chat/completions protocol (stdlib only, no SDK
   required), or
-* a remote http endpoint the agent POSTs JSON messages to.
+* a remote http endpoint the agent POSTs JSON messages to, or
+* an external command-line program (cli) that receives the message as
+  its last argument and returns its stdout/stderr.
 
 AgentFactory builds agents from kind strings or config dicts so that
 YAML/JSON configuration can describe whole agent teams.
 """
 import json
 import os
+import subprocess
 import time
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
@@ -280,6 +283,10 @@ class AgentFactory:
       API. api_key kwarg or the matching environment variable is required
       at call time.
     - custom: user-supplied callable via the handler kwarg.
+    - cli: external command-line agent. Kwargs command (required), args
+      (default []), timeout (default 300 seconds), cwd (optional working
+      directory) and encoding (default "utf-8"). The message is appended
+      as the final argument to the command.
     """
 
     @staticmethod
@@ -339,7 +346,45 @@ class AgentFactory:
                 raise ValueError("custom agent requires a callable 'handler' kwarg")
             return Agent(name, handler, role=kwargs.get("role"))
 
-        raise ValueError(f"Unknown agent kind: {kind} (mock|echo|http|deepseek|openai|custom)")
+        if kind == "cli":
+            command = kwargs.get("command")
+            if not command:
+                raise ValueError("cli agent requires 'command' kwarg")
+            args = list(kwargs.get("args") or [])
+            timeout = float(kwargs.get("timeout", 300.0))
+            cwd = kwargs.get("cwd")
+            encoding = kwargs.get("encoding", "utf-8")
+
+            def handler(msg: Any):
+                try:
+                    proc = subprocess.run(
+                        [command, *args, str(msg)],
+                        capture_output=True,
+                        timeout=timeout,
+                        cwd=cwd,
+                        encoding=encoding,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        f"cli agent {name} timed out after {timeout:g} seconds (超时)"
+                    ) from exc
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"cli agent {name}: command not found (命令不存在): {command}"
+                    ) from exc
+                if proc.returncode != 0:
+                    stderr = (proc.stderr or "").strip()
+                    raise RuntimeError(
+                        f"cli agent {name} exited {proc.returncode}: {stderr}"
+                    )
+                stdout = (proc.stdout or "").strip()
+                if stdout:
+                    return stdout
+                return (proc.stderr or "").strip()
+
+            return Agent(name, handler, role=kwargs.get("role"))
+
+        raise ValueError(f"Unknown agent kind: {kind} (mock|echo|http|deepseek|openai|custom|cli)")
 
     @staticmethod
     def from_config(cfg: Dict[str, Any]) -> Agent:

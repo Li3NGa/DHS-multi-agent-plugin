@@ -1,88 +1,139 @@
-"""Agent coordination primitives and Deepseek harness adapter stub.
+"""Agent coordination primitives and the DeepSeek harness adapter.
 
-This file provides a minimal AgentCoordinator to register agents, send messages,
-and run a cooperative task. DeepseekAdapter is a minimal stub showing where to
-hook into the Deepseek harness (implement according to Deepseek's adapter API).
+AgentCoordinator owns the agent registry and the shared discussion memory,
+and dispatches tasks to the collaboration strategies implemented in
+``.strategies`` (broadcast, sequential, debate, supervisor, consensus).
+
+DeepseekAdapter translates harness/HTTP events into coordinator runs so
+external systems (e.g. the DeepSeek Harness) can drive the plugin over
+JSON without importing this package.
 """
-from typing import Callable, Dict, List, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+from typing import Any, Dict, List, Optional
 
-class Agent:
-    """Simple agent interface: must implement handle(message) -> response."""
-    def __init__(self, name: str, handler: Callable[[Any], Any]):
-        self.name = name
-        self.handler = handler
+from .agents import Agent
+from .memory import MessageStore
 
-    def handle(self, message: Any) -> Any:
-        return self.handler(message)
 
 class AgentCoordinator:
-    """Coordinate multiple agents for collaborative tasks."""
-    def __init__(self):
-        self.agents: Dict[str, Agent] = {}
+    """Registry of agents plus the shared memory and strategy dispatch."""
 
-    def register_agent(self, agent: Agent) -> None:
-        self.agents[agent.name] = agent
+    def __init__(self, memory: Optional[MessageStore] = None, timeout: float = 15.0):
+        self._agents: Dict[str, Agent] = {}
+        self.memory = memory if memory is not None else MessageStore()
+        self.timeout = timeout
+
+    # -- registry ---------------------------------------------------------
+    def register_agent(self, agent: Agent, replace: bool = True) -> None:
+        """Register an agent; optionally replace an existing one with the
+        same name."""
+        if agent.name in self._agents and not replace:
+            raise ValueError(f"agent '{agent.name}' already registered")
+        self._agents[agent.name] = agent
 
     def unregister_agent(self, name: str) -> None:
-        self.agents.pop(name, None)
+        self._agents.pop(name, None)
 
-    def broadcast(self, message: Any, timeout: float = 10.0) -> Dict[str, Any]:
-        """Send message to all agents in parallel and collect responses."""
-        results: Dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=len(self.agents) or 1) as ex:
-            futures = {ex.submit(a.handle, message): n for n, a in self.agents.items()}
-            start = time.time()
-            for f in as_completed(futures, timeout=timeout):
-                name = futures[f]
-                try:
-                    results[name] = f.result()
-                except Exception as e:
-                    results[name] = {"error": str(e)}
-            # best-effort: mark agents without responses as timed out
-            elapsed = time.time() - start
-            if elapsed >= timeout:
-                for n in self.agents.keys():
-                    results.setdefault(n, {"error": "timeout"})
-        return results
+    def get_agent(self, name: str) -> Optional[Agent]:
+        return self._agents.get(name)
+
+    @property
+    def agents(self) -> List[Agent]:
+        """Agents in registration order."""
+        return list(self._agents.values())
+
+    @property
+    def agent_names(self) -> List[str]:
+        return list(self._agents.keys())
+
+    def __len__(self) -> int:
+        return len(self._agents)
+
+    # -- execution ---------------------------------------------------------
+    def run(self, prompt: str, strategy: str = "auto", **kwargs: Any) -> Dict[str, Any]:
+        """Run a collaborative task with the named strategy.
+
+        strategy: one of broadcast | sequential | debate | supervisor |
+        consensus | auto. With "auto", a strategy is picked from the
+        registered agents (see _auto_strategy).
+
+        Extra kwargs (rounds, judge, order, workers, timeout, ...) are
+        forwarded to the strategy function.
+        """
+        from . import strategies  # local import keeps module graph acyclic
+        if not self._agents:
+            raise RuntimeError("no agents registered")
+        if (strategy or "").lower() == "auto":
+            strategy = self._auto_strategy()
+        return strategies.run_strategy(self, strategy, prompt, **kwargs)
+
+    def _auto_strategy(self) -> str:
+        """Heuristic: 1 agent -> broadcast; a "supervisor" agent present
+        -> supervisor; otherwise debate (2+ agents)."""
+        names = self.agent_names
+        if len(names) == 1:
+            return "broadcast"
+        if "supervisor" in names:
+            return "supervisor"
+        return "debate"
+
+    # -- backward-compatible helpers ----------------------------------------
+    def broadcast(self, message: Any, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Legacy: ask every agent in parallel for a single message."""
+        from .strategies import _parallel
+        return _parallel(self, message, timeout=timeout if timeout is not None else self.timeout)
 
     def run_cooperative_task(self, initial_prompt: str, rounds: int = 3) -> List[Dict[str, Any]]:
-        """Run several rounds where agents see last messages and respond.
-        Returns list of round responses.
-        """
-        history = [ {"round": 0, "prompt": initial_prompt} ]
-        last_message = initial_prompt
-        for r in range(1, rounds+1):
-            responses = self.broadcast(last_message)
-            history.append({"round": r, "responses": responses})
-            # simple aggregation: concatenate agent outputs for next round
-            parts = []
-            for v in responses.values():
-                if isinstance(v, dict) and "error" in v:
-                    continue
-                parts.append(str(v))
-            last_message = "\n".join(parts) or last_message
-        return history
+        """Legacy API kept for compatibility: same as ``run(..., strategy="broadcast")``.
+        Returns the list of round records."""
+        result = self.run(initial_prompt, strategy="broadcast", rounds=rounds,
+                          timeout=self.timeout)
+        return result["rounds"]
 
 
 class DeepseekAdapter:
-    """Stub for Deepseek harness integration.
+    """Translate harness events into AgentCoordinator runs.
 
-    Implement adapter methods according to Deepseek harness expectations, e.g.
-    initializing with harness-provided callbacks, reporting progress, and
-    mapping harness inputs to AgentCoordinator calls.
+    Supported events (JSON dicts):
+
+    - {"type": "run", "prompt": str, "strategy": str, "rounds": int,
+       "judge": str, "order": [names], "workers": [names], "timeout": float}
+    - {"type": "agents"}            -> registered agents
+    - {"type": "status"}            -> status summary
+    - {"type": "register", "agents": [{name, kind, ...}]}  -> register from config dicts
     """
+
     def __init__(self, coordinator: AgentCoordinator):
         self.coordinator = coordinator
 
     def handle_harness_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Translate a harness event into agent interactions and return result.
-        Example event: {"type": "run", "prompt": "..."}
-        """
         t = event.get("type")
         if t == "run":
             prompt = event.get("prompt", "")
-            rounds = int(event.get("rounds", 3))
-            return {"history": self.coordinator.run_cooperative_task(prompt, rounds)}
-        return {"error": "unsupported event type"}
+            if not prompt:
+                return {"error": "missing prompt"}
+            kwargs: Dict[str, Any] = {}
+            for key in ("rounds", "judge", "order", "workers", "timeout"):
+                if event.get(key) is not None:
+                    kwargs[key] = event[key]
+            return self.coordinator.run(
+                prompt,
+                strategy=event.get("strategy", "auto"),
+                **kwargs,
+            )
+        if t == "agents":
+            return {"agents": [a.describe() for a in self.coordinator.agents]}
+        if t == "status":
+            return {
+                "status": "ok",
+                "agents": [a.name for a in self.coordinator.agents],
+                "strategy": self.coordinator._auto_strategy() if self.coordinator.agents else None,
+            }
+        if t == "register":
+            from .agents import AgentFactory
+            added = []
+            for cfg in event.get("agents", []):
+                agent = AgentFactory.from_config(cfg)
+                self.coordinator.register_agent(agent)
+                added.append(agent.name)
+            return {"registered": added}
+        return {"error": f"unsupported event type: {t}"}

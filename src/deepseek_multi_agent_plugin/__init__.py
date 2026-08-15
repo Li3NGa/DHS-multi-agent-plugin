@@ -1,11 +1,29 @@
-"""deepseek_multi_agent_plugin
+"""deepseek_multi_agent_plugin.
 
-Package entry points and version.
+A multi-agent collaboration plugin for the DeepSeek ecosystem: define a
+team of agents (mock, HTTP or LLM-backed) and run them together with one
+of the built-in collaboration strategies - broadcast, sequential, debate,
+supervisor or consensus. An HTTP adapter server and a CLI make the plugin
+easy to drive from the DeepSeek Harness or any other caller.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
+from .agents import Agent, AgentFactory, chat_completion
+from .config import build_coordinator, load_config
 from .coordinator import AgentCoordinator, DeepseekAdapter
-from .agents import AgentFactory
+from .memory import MessageStore
+from . import strategies
 
-__all__ = ["AgentCoordinator", "DeepseekAdapter", "AgentFactory", "__version__"]
+__all__ = [
+    "Agent",
+    "AgentCoordinator",
+    "AgentFactory",
+    "DeepseekAdapter",
+    "MessageStore",
+    "build_coordinator",
+    "chat_completion",
+    "load_config",
+    "strategies",
+    "__version__",
+]

@@ -1,18 +1,29 @@
 [project]
 name = "deepseek-multi-agent-plugin"
-version = "0.1.0"
-description = "Multi-agent coordination plugin with a Deepseek harness adapter"
-authors = [ { name = "Your Name" } ]
-license = { text = "MIT" }
+version = "0.2.0"
+description = "Multi-agent collaboration plugin: broadcast, sequential, debate, supervisor and consensus strategies over DeepSeek/OpenAI-compatible LLMs"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [ { name = "Li3NGa" } ]
+keywords = ["multi-agent", "llm", "deepseek", "collaboration", "orchestration", "plugin"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pyyaml"]
 
 [project.scripts]
+deepseek-multi-agent = "deepseek_multi_agent_plugin.cli:main"
 deepseek-plugin-runner = "deepseek_multi_agent_plugin.adapter_server:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

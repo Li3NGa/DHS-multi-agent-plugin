@@ -1,7 +1,7 @@
 [project]
 name = "deepseek-multi-agent-plugin"
 version = "0.4.2"
-description = "Multi-agent collaboration plugin: broadcast, sequential, debate, supervisor and consensus strategies over DeepSeek/OpenAI-compatible LLMs"
+description = "Multi-agent collaboration plugin: broadcast, sequential, debate, supervisor, consensus and relay strategies over DeepSeek/OpenAI-compatible LLMs"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

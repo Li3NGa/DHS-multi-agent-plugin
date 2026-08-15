@@ -58,7 +58,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 ```bash
 # 安装（无需任何运行时依赖）
-pip install deepseek-multi-agent-plugin
+pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin
 
 # 用两个内置 mock Agent 跑一场辩论，无需 API Key
 deepseek-multi-agent run --demo --strategy debate --rounds 2 \

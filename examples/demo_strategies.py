@@ -1,4 +1,4 @@
-"""演示全部 5 种协作策略（使用 mock Agent，无需 API Key）。
+"""演示全部 6 种协作策略（使用 mock Agent，无需 API Key）。
 
 运行方式：
     python examples/demo_strategies.py
@@ -57,6 +57,10 @@ def main() -> None:
     show(
         "5) consensus（提案 + 投票）",
         coord.run(prompt, strategy="consensus", judge="researcher"),
+    )
+    show(
+        "6) relay（接力迭代）",
+        coord.run(prompt, strategy="relay", rounds=1, order=["researcher", "critic"]),
     )
 
 

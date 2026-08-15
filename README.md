@@ -12,6 +12,8 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](pyproject.toml)
 
+> 📚 详细使用文档：[使用指南](docs/usage.md) · [策略详解](docs/strategies.md) · [API 参考](docs/api_reference.md) · [HTTP 接口](docs/http_api.md) · [示例代码](examples/)
+
 ---
 
 ## 特性 / Features
@@ -193,6 +195,25 @@ result = adapter.handle_harness_event({
 
 支持的事件类型：`run`、`agents`、`status`、`register`。HTTP 适配服务即基于此接口实现，
 因此任何能发起 HTTP 请求的系统（包括 DeepSeek Harness 的工作流）都可以直接调用本插件。
+
+## 文档 / Documentation
+
+详细使用说明都在 [docs/](docs/) 目录，从 [使用指南](docs/usage.md) 开始：
+
+| 文档 | 内容 |
+| --- | --- |
+| [详细使用说明](docs/usage.md) | 安装、配置、CLI / Python API / HTTP 三种用法、接入真实 LLM、FAQ |
+| [协作策略详解](docs/strategies.md) | 5 种策略的流程、参数、返回结构、选型建议 |
+| [Python API 参考](docs/api_reference.md) | 全部类与函数的签名、参数、返回值 |
+| [HTTP 服务接口](docs/http_api.md) | 四个端点的请求/响应协议、curl 示例、安全建议 |
+
+可直接运行的示例代码在 [examples/](examples/)：
+
+| 示例 | 说明 |
+| --- | --- |
+| [demo_strategies.py](examples/demo_strategies.py) | mock 团队演示全部 5 种策略，无需 API Key |
+| [demo_deepseek_team.py](examples/demo_deepseek_team.py) | DeepSeek 真实 LLM 三人辩论 |
+| [run_http_server.py](examples/run_http_server.py) | 一键启动 HTTP 适配服务 |
 
 ## 开发与测试 / Development
 

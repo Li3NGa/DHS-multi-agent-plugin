@@ -52,11 +52,17 @@ class MessageStore:
         with self._lock:
             return len(self._messages)
 
-    def to_chat(self, limit: Optional[int] = None) -> List[Dict[str, str]]:
+    def to_chat(
+        self,
+        limit: Optional[int] = None,
+        with_speaker: bool = False,
+    ) -> List[Dict[str, str]]:
         """Project messages into OpenAI-style chat format [{role, content}].
 
-        Only user/assistant/system messages are included; agent metadata is
-        dropped so the projection can be passed straight to an LLM backend.
+        Only user/assistant/system messages are included. With
+        ``with_speaker=True``, assistant messages produced by a named agent
+        are prefixed with ``[agent_name]: `` so LLM participants can tell
+        who said what in a shared discussion.
         """
         msgs = self.all() if limit is None else self.recent(limit)
         out = []
@@ -64,5 +70,8 @@ class MessageStore:
             role = m.get("role")
             if role not in ("user", "assistant", "system"):
                 continue
-            out.append({"role": role, "content": str(m.get("content", ""))})
+            content = str(m.get("content", ""))
+            if with_speaker and role == "assistant" and m.get("agent"):
+                content = f"[{m['agent']}]: {content}"
+            out.append({"role": role, "content": content})
         return out

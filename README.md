@@ -20,8 +20,11 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 - **5 种开箱即用的协作策略**：广播讨论、顺序流水线（chain-of-agents）、多轮辩论（含裁判）、主管-下属（任务分解与并行执行）、提案-投票共识。
 - **灵活的 Agent 定义**：`mock` / `echo` / `http` / `deepseek` / `openai` / `custom` 六种后端，LLM 调用仅依赖标准库（OpenAI 兼容 `/chat/completions` 协议）。
-- **共享对话记忆**：所有策略共享一个线程安全的 `MessageStore`，每个 Agent 都能看到讨论全程。
-- **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作。
+- **共享对话记忆**：所有策略共享一个线程安全的 `MessageStore`，每个 Agent 都能看到讨论全程；辩论上下文带发言人标签（`[agent]: ...`），LLM 能分清谁说了什么。
+- **会话隔离**：事件可携带 `session_id`，每个会话获得独立的 Agent 注册表与对话记忆，并发任务互不污染。
+- **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作；超时不再阻塞等待慢 Agent；LLM 调用对 429/5xx 与网络抖动自动指数退避重试。
+- **Token 用量统计与结构化输出**：按 Agent 累计 `usage`（prompt/completion/total tokens，汇总进 `meta.usage`）；`Agent.chat()` 支持 `response_format`（如 JSON 模式）透传。
+- **HTTP 服务鉴权**：`--token`（或环境变量 `DS_AGENT_TOKEN`）启用 `Authorization: Bearer <token>` 校验。
 - **三种使用方式**：Python API、命令行（`deepseek-multi-agent`）、HTTP 适配服务（可对接 DeepSeek Harness 等外部系统）。
 - **零运行时依赖**（可选安装 PyYAML 以支持 YAML 配置），测试与 CI 完整。
 
@@ -164,9 +167,16 @@ curl -s localhost:8000/health
 curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d \
   '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
 
+# 会话隔离：携带 session_id 的事件路由到该会话独立的注册表与记忆
+curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d \
+  '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1, "session_id": "task-42"}'
+
 curl -s localhost:8000/agents
 curl -s -X POST localhost:8000/register -H "Content-Type: application/json" -d \
   '{"type": "register", "agents": [{"name": "w1", "kind": "echo"}]}'
+
+# 启用鉴权（--token 或环境变量 DS_AGENT_TOKEN）后，请求需携带
+# -H "Authorization: Bearer <token>"，否则返回 401
 ```
 
 | 端点 | 方法 | 说明 |

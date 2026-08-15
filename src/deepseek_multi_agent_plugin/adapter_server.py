@@ -7,6 +7,13 @@ Endpoints:
   POST /run        -> {"type": "run", "prompt": "...", "strategy": "...", ...}
   POST /register   -> {"type": "register", "agents": [{name, kind, ...}]}
 
+Events may carry an optional ``session_id``; sessions get isolated
+coordinators (own agent registry + shared memory) via SessionRegistry, so
+concurrent harness tasks never see each other's discussion history.
+
+When a token is configured (--token or the DS_AGENT_TOKEN environment
+variable), every request must send ``Authorization: Bearer <token>``.
+
 The server uses only the Python standard library. Example:
 
   python -m deepseek_multi_agent_plugin.adapter_server --port 8000 --demo
@@ -17,14 +24,46 @@ The server uses only the Python standard library. Example:
 import argparse
 import json
 import logging
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional, Tuple
+from threading import Lock
+from typing import Callable, Dict, Optional, Tuple
 
 from .agents import Agent, AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
+
+
+class SessionRegistry:
+    """Map session ids to isolated AgentCoordinator instances.
+
+    A ``factory`` callable builds a fresh coordinator per session (typically
+    rebuilding the configured team); without one, empty coordinators are
+    created (register agents per session via the ``register`` event).
+    """
+
+    def __init__(self, factory: Optional[Callable[[], AgentCoordinator]] = None):
+        self._factory = factory
+        self._sessions: Dict[str, AgentCoordinator] = {}
+        self._lock = Lock()
+
+    def get_or_create(self, session_id: str) -> AgentCoordinator:
+        with self._lock:
+            coord = self._sessions.get(session_id)
+            if coord is None:
+                coord = self._factory() if self._factory else AgentCoordinator()
+                self._sessions[session_id] = coord
+            return coord
+
+    def session_ids(self):
+        with self._lock:
+            return list(self._sessions)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._sessions)
 
 
 class AdapterHandler(BaseHTTPRequestHandler):
@@ -35,6 +74,13 @@ class AdapterHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _authorized(self) -> bool:
+        token = getattr(self.server, "auth_token", None)
+        if not token:
+            return True
+        header = self.headers.get("Authorization") or ""
+        return header == f"Bearer {token}"
 
     def _read_event(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -50,6 +96,9 @@ class AdapterHandler(BaseHTTPRequestHandler):
         return event
 
     def do_GET(self):
+        if not self._authorized():
+            self._send_json({"error": "unauthorized"}, code=401)
+            return
         if self.path.split("?")[0] == "/health":
             self._send_json({"status": "ok"})
         elif self.path.split("?")[0] == "/agents":
@@ -59,6 +108,9 @@ class AdapterHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, code=404)
 
     def do_POST(self):
+        if not self._authorized():
+            self._send_json({"error": "unauthorized"}, code=401)
+            return
         path = self.path.split("?")[0]
         if path not in ("/run", "/register"):
             self._send_json({"error": "not found"}, code=404)
@@ -90,11 +142,21 @@ def register_demo_agents(coordinator: AgentCoordinator) -> None:
     )
 
 
-def serve(host: str, port: int, coordinator: AgentCoordinator) -> None:
+def serve(
+    host: str,
+    port: int,
+    coordinator: AgentCoordinator,
+    token: Optional[str] = None,
+    session_factory: Optional[Callable[[], AgentCoordinator]] = None,
+) -> None:
     server = ThreadingHTTPServer((host, port), AdapterHandler)
-    server.adapter = DeepseekAdapter(coordinator)
-    log.info("adapter server listening on http://%s:%s (agents: %s)",
-             host, port, coordinator.agent_names)
+    registry = SessionRegistry(factory=session_factory) if session_factory else None
+    server.adapter = DeepseekAdapter(coordinator, registry=registry)
+    server.auth_token = token
+    log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
+             host, port, coordinator.agent_names,
+             "on" if token else "off",
+             "on" if session_factory else "off")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -109,17 +171,30 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--config", default=None, help="YAML/JSON agent config file")
     parser.add_argument("--demo", action="store_true", help="register demo mock agents")
+    parser.add_argument("--token", default=os.environ.get("DS_AGENT_TOKEN"),
+                        help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if args.config:
-        coord = build_coordinator(path=args.config)
+        from .config import load_config
+        config = load_config(args.config)
+        coord = build_coordinator(config=config)
+        session_factory = lambda: build_coordinator(config=dict(config))
+    elif args.demo:
+        coord = AgentCoordinator()
+
+        def session_factory():
+            c = AgentCoordinator()
+            register_demo_agents(c)
+            return c
+
+        register_demo_agents(coord)
     else:
         coord = AgentCoordinator()
-        if args.demo:
-            register_demo_agents(coord)
-    serve(args.host, args.port, coord)
+        session_factory = None
+    serve(args.host, args.port, coord, token=args.token, session_factory=session_factory)
 
 
 if __name__ == "__main__":

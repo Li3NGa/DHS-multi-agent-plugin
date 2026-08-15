@@ -21,28 +21,42 @@ from typing import Any, Dict, List, Optional, Sequence
 
 
 def _call_agent(agent, message, context=None, timeout=None):
-    """Call one agent; exceptions are returned as {"error": ...} dicts."""
-    try:
-        if timeout is None:
+    """Call one agent; exceptions are returned as {"error": ...} dicts.
+
+    On timeout the executor is shut down without waiting, so a hung agent
+    never blocks the strategy thread past its timeout (the worker thread
+    itself keeps running until the agent's own HTTP timeout fires).
+    """
+    if timeout is None:
+        try:
             return agent.handle(message, context)
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(agent.handle, message, context)
-            return fut.result(timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - strategy-level resilience
+            return {"error": str(e)}
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = ex.submit(agent.handle, message, context)
+        return fut.result(timeout=timeout)
+    except TimeoutError:
+        return {"error": "timeout"}
     except Exception as e:  # noqa: BLE001 - strategy-level resilience
         return {"error": str(e)}
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def _parallel(coord, message, agents=None, context=None, timeout=None) -> Dict[str, Any]:
     """Ask every agent in parallel; errors are captured per agent."""
     targets = agents if agents is not None else coord.agents
     results: Dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(targets))) as ex:
-        futures = {ex.submit(_call_agent, a, message, context, timeout): a.name for a in targets}
-        try:
-            for f in as_completed(futures, timeout=timeout):
-                results[futures[f]] = f.result()
-        except TimeoutError:
-            pass  # remaining agents are marked below
+    ex = ThreadPoolExecutor(max_workers=max(1, len(targets)))
+    futures = {ex.submit(_call_agent, a, message, context, timeout): a.name for a in targets}
+    try:
+        for f in as_completed(futures, timeout=timeout):
+            results[futures[f]] = f.result()
+    except TimeoutError:
+        pass  # remaining agents are marked below
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     for a in targets:
         results.setdefault(a.name, {"error": "timeout"})
     return results
@@ -66,11 +80,19 @@ def _record(coord, role: str, content: Any, agent: Optional[str] = None):
 
 
 def _meta(coord, start: float, strategy: str) -> Dict[str, Any]:
-    return {
+    usage = {
+        a.name: dict(a.total_usage)
+        for a in coord.agents
+        if getattr(a, "total_usage", {}).get("total_tokens")
+    }
+    meta: Dict[str, Any] = {
         "elapsed_seconds": round(time.time() - start, 3),
         "agents": [a.name for a in coord.agents],
         "strategy": strategy,
     }
+    if usage:
+        meta["usage"] = usage
+    return meta
 
 
 # --------------------------------------------------------------------------
@@ -155,7 +177,7 @@ def run_debate(
     _record(coord, "user", prompt)
     last_responses = {}
     for r in range(1, max(1, int(rounds)) + 1):
-        context = coord.memory.to_chat()
+        context = coord.memory.to_chat(with_speaker=True)
         responses = _parallel(coord, prompt, context=context, timeout=timeout)
         for name, resp in responses.items():
             if not _is_error(resp):
@@ -227,16 +249,18 @@ def run_supervisor(
     for i, sub in enumerate(subtasks):
         assigned.setdefault(worker_names[i % len(worker_names)], []).append(sub)
     results: Dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=max(1, len(assigned))) as ex:
-        futures = {
-            ex.submit(_call_agent, coord.get_agent(w), "\n".join(tasks), None, timeout): w
-            for w, tasks in assigned.items()
-        }
-        try:
-            for f in as_completed(futures, timeout=timeout):
-                results[futures[f]] = f.result()
-        except TimeoutError:
-            pass
+    ex = ThreadPoolExecutor(max_workers=max(1, len(assigned)))
+    futures = {
+        ex.submit(_call_agent, coord.get_agent(w), "\n".join(tasks), None, timeout): w
+        for w, tasks in assigned.items()
+    }
+    try:
+        for f in as_completed(futures, timeout=timeout):
+            results[futures[f]] = f.result()
+    except TimeoutError:
+        pass
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     for w in assigned:
         results.setdefault(w, {"error": "timeout"})
     for name, resp in results.items():

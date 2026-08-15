@@ -14,7 +14,10 @@ YAML/JSON configuration can describe whole agent teams.
 """
 import json
 import os
+import time
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
+from urllib import error as urlerror
 from urllib import request
 
 from .memory import MessageStore
@@ -23,6 +26,10 @@ from .memory import MessageStore
 # --------------------------------------------------------------------------
 # LLM chat completion over OpenAI-compatible HTTP (stdlib only)
 # --------------------------------------------------------------------------
+# HTTP statuses worth retrying (rate limit + transient server errors).
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
 def chat_completion(
     base_url: str,
     api_key: str,
@@ -31,28 +38,68 @@ def chat_completion(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     timeout: float = 60.0,
-) -> str:
-    """Call POST {base_url}/chat/completions and return the reply text."""
+    retries: int = 2,
+    backoff: float = 0.5,
+    response_format: Optional[Dict[str, Any]] = None,
+    return_usage: bool = False,
+) -> Any:
+    """Call POST {base_url}/chat/completions and return the reply text.
+
+    Transient failures (HTTP 429/5xx, connection/timeout errors) are retried
+    up to ``retries`` times with exponential backoff.
+
+    With ``return_usage=True`` returns ``{"content": str, "usage": dict}``
+    instead of just the content string, so callers can track token usage.
+    ``response_format`` (e.g. ``{"type": "json_object"}``) is forwarded to the
+    API verbatim for structured-output mode.
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     payload: Dict[str, Any] = {"model": model, "messages": messages}
     if temperature is not None:
         payload["temperature"] = float(temperature)
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
-    req = request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + api_key,
-        },
-    )
-    with request.urlopen(req, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    if response_format is not None:
+        payload["response_format"] = response_format
+    body: Dict[str, Any] = {}
+    for attempt in range(max(0, retries) + 1):
+        req = request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + api_key,
+            },
+        )
+        try:
+            with request.urlopen(req, timeout=timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            break
+        except urlerror.HTTPError as exc:
+            if exc.code in RETRYABLE_STATUS and attempt < retries:
+                time.sleep(backoff * (2 ** attempt))
+                continue
+            raise
+        except (urlerror.URLError, TimeoutError, OSError):
+            if attempt < retries:
+                time.sleep(backoff * (2 ** attempt))
+                continue
+            raise
     try:
-        return body["choices"][0]["message"]["content"]
+        content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        return json.dumps(body, ensure_ascii=False)
+        content = json.dumps(body, ensure_ascii=False)
+    if return_usage:
+        usage = body.get("usage") or {}
+        return {
+            "content": content,
+            "usage": {
+                "prompt_tokens": usage.get("prompt_tokens", 0) or 0,
+                "completion_tokens": usage.get("completion_tokens", 0) or 0,
+                "total_tokens": usage.get("total_tokens", 0) or 0,
+            },
+        }
+    return content
 
 
 class Agent:
@@ -78,8 +125,11 @@ class Agent:
     api_key / base_url:
         Optional provider credentials; fall back to environment variables
         (DEEPSEEK_API_KEY / OPENAI_API_KEY) and provider defaults.
-    memory:
-        Optional MessageStore; a fresh one is created per agent.
+        retries:
+            How many times transient LLM call failures (429/5xx, connection
+            errors) are retried with exponential backoff.
+        memory:
+            Optional MessageStore; a fresh one is created per agent.
     """
 
     PROVIDER_DEFAULTS = {
@@ -100,6 +150,7 @@ class Agent:
         max_tokens: Optional[int] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        retries: int = 2,
         memory: Optional[MessageStore] = None,
         timeout: float = 60.0,
     ):
@@ -111,8 +162,15 @@ class Agent:
         self.max_tokens = max_tokens
         self.api_key = api_key
         self.base_url = base_url
+        self.retries = int(retries)
         self.timeout = timeout
         self.memory = memory if memory is not None else MessageStore()
+        self.total_usage: Dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        self._usage_lock = Lock()
         self._handler = handler
         if self.provider and self.provider not in self.PROVIDER_DEFAULTS:
             raise ValueError(
@@ -121,7 +179,16 @@ class Agent:
         self.model = model or (self.PROVIDER_DEFAULTS[self.provider]["model"] if self.provider else None)
 
     # -- backend plumbing ---------------------------------------------------
-    def _provider_chat(self, messages: List[Dict[str, str]]) -> str:
+    def _add_usage(self, usage: Dict[str, int]) -> None:
+        with self._usage_lock:
+            for key, value in usage.items():
+                self.total_usage[key] = self.total_usage.get(key, 0) + (value or 0)
+
+    def _provider_chat(
+        self,
+        messages: List[Dict[str, str]],
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
         defaults = self.PROVIDER_DEFAULTS[self.provider]
         key = self.api_key or os.environ.get(defaults["env_key"])
         if not key:
@@ -129,7 +196,7 @@ class Agent:
                 f"agent '{self.name}': missing API key ({defaults['env_key']} or api_key=...)"
             )
         url = self.base_url or defaults["base_url"]
-        return chat_completion(
+        out = chat_completion(
             base_url=url,
             api_key=key,
             model=self.model,
@@ -137,7 +204,12 @@ class Agent:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             timeout=self.timeout,
+            retries=self.retries,
+            response_format=response_format,
+            return_usage=True,
         )
+        self._add_usage(out["usage"])
+        return out["content"]
 
     # -- public API ---------------------------------------------------------
     def handle(self, message: Any, context: Optional[List[Dict[str, str]]] = None) -> Any:
@@ -161,13 +233,21 @@ class Agent:
 
         raise RuntimeError(f"agent '{self.name}' has no backend (no handler, no provider)")
 
-    def chat(self, messages: List[Dict[str, str]]) -> str:
-        """Direct provider call with a full chat message list (no injection)."""
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Direct provider call with a full chat message list (no injection).
+
+        ``response_format`` is forwarded to the provider, e.g.
+        ``{"type": "json_object"}`` for structured output mode.
+        """
         if not self.provider:
             raise RuntimeError(f"agent '{self.name}' is not an LLM agent")
         if self.system_prompt:
             messages = [{"role": "system", "content": self.system_prompt}, *messages]
-        return self._provider_chat(messages)
+        return self._provider_chat(messages, response_format=response_format)
 
     def describe(self) -> Dict[str, Any]:
         return {
@@ -176,6 +256,7 @@ class Agent:
             "provider": self.provider,
             "model": self.model,
             "has_handler": self._handler is not None,
+            "total_usage": dict(self.total_usage),
         }
 
     def __repr__(self) -> str:
@@ -215,6 +296,7 @@ class AgentFactory:
                 max_tokens=kwargs.get("max_tokens"),
                 api_key=kwargs.get("api_key"),
                 base_url=kwargs.get("base_url"),
+                retries=int(kwargs.get("retries", 2)),
                 timeout=float(kwargs.get("timeout", 60.0)),
             )
 

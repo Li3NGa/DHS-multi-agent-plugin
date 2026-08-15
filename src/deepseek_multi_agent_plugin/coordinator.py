@@ -8,6 +8,7 @@ DeepseekAdapter translates harness/HTTP events into coordinator runs so
 external systems (e.g. the DeepSeek Harness) can drive the plugin over
 JSON without importing this package.
 """
+from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from .agents import Agent
@@ -15,10 +16,16 @@ from .memory import MessageStore
 
 
 class AgentCoordinator:
-    """Registry of agents plus the shared memory and strategy dispatch."""
+    """Registry of agents plus the shared memory and strategy dispatch.
+
+    The registry is guarded by a lock so HTTP-driven registration can happen
+    concurrently with running collaborations (property access returns an
+    immutable snapshot).
+    """
 
     def __init__(self, memory: Optional[MessageStore] = None, timeout: float = 15.0):
         self._agents: Dict[str, Agent] = {}
+        self._lock = RLock()
         self.memory = memory if memory is not None else MessageStore()
         self.timeout = timeout
 
@@ -26,27 +33,33 @@ class AgentCoordinator:
     def register_agent(self, agent: Agent, replace: bool = True) -> None:
         """Register an agent; optionally replace an existing one with the
         same name."""
-        if agent.name in self._agents and not replace:
-            raise ValueError(f"agent '{agent.name}' already registered")
-        self._agents[agent.name] = agent
+        with self._lock:
+            if agent.name in self._agents and not replace:
+                raise ValueError(f"agent '{agent.name}' already registered")
+            self._agents[agent.name] = agent
 
     def unregister_agent(self, name: str) -> None:
-        self._agents.pop(name, None)
+        with self._lock:
+            self._agents.pop(name, None)
 
     def get_agent(self, name: str) -> Optional[Agent]:
-        return self._agents.get(name)
+        with self._lock:
+            return self._agents.get(name)
 
     @property
     def agents(self) -> List[Agent]:
-        """Agents in registration order."""
-        return list(self._agents.values())
+        """Agents in registration order (snapshot copy)."""
+        with self._lock:
+            return list(self._agents.values())
 
     @property
     def agent_names(self) -> List[str]:
-        return list(self._agents.keys())
+        with self._lock:
+            return list(self._agents.keys())
 
     def __len__(self) -> int:
-        return len(self._agents)
+        with self._lock:
+            return len(self._agents)
 
     # -- execution ---------------------------------------------------------
     def run(self, prompt: str, strategy: str = "auto", **kwargs: Any) -> Dict[str, Any]:
@@ -96,17 +109,32 @@ class DeepseekAdapter:
     Supported events (JSON dicts):
 
     - {"type": "run", "prompt": str, "strategy": str, "rounds": int,
-       "judge": str, "order": [names], "workers": [names], "timeout": float}
+       "judge": str, "order": [names], "workers": [names], "timeout": float,
+       "session_id": str (optional)}
     - {"type": "agents"}            -> registered agents
     - {"type": "status"}            -> status summary
     - {"type": "register", "agents": [{name, kind, ...}]}  -> register from config dicts
+
+    When a ``registry`` (a SessionRegistry or any callable mapping
+    session ids to coordinators) is provided and an event carries a
+    ``session_id``, the event is routed to that session's own coordinator,
+    giving every session an isolated agent registry and shared memory.
+    Events without ``session_id`` keep using the default coordinator.
     """
 
-    def __init__(self, coordinator: AgentCoordinator):
+    def __init__(self, coordinator: AgentCoordinator, registry=None):
         self.coordinator = coordinator
+        self.registry = registry
+
+    def _coordinator_for(self, event: Dict[str, Any]) -> AgentCoordinator:
+        session_id = event.get("session_id")
+        if session_id and self.registry is not None:
+            return self.registry.get_or_create(session_id)
+        return self.coordinator
 
     def handle_harness_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         t = event.get("type")
+        coord = self._coordinator_for(event)
         if t == "run":
             prompt = event.get("prompt", "")
             if not prompt:
@@ -115,25 +143,25 @@ class DeepseekAdapter:
             for key in ("rounds", "judge", "order", "workers", "timeout"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
-            return self.coordinator.run(
+            return coord.run(
                 prompt,
                 strategy=event.get("strategy", "auto"),
                 **kwargs,
             )
         if t == "agents":
-            return {"agents": [a.describe() for a in self.coordinator.agents]}
+            return {"agents": [a.describe() for a in coord.agents]}
         if t == "status":
             return {
                 "status": "ok",
-                "agents": [a.name for a in self.coordinator.agents],
-                "strategy": self.coordinator._auto_strategy() if self.coordinator.agents else None,
+                "agents": [a.name for a in coord.agents],
+                "strategy": coord._auto_strategy() if coord.agents else None,
             }
         if t == "register":
             from .agents import AgentFactory
             added = []
             for cfg in event.get("agents", []):
                 agent = AgentFactory.from_config(cfg)
-                self.coordinator.register_agent(agent)
+                coord.register_agent(agent)
                 added.append(agent.name)
             return {"registered": added}
         return {"error": f"unsupported event type: {t}"}

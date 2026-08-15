@@ -1,6 +1,6 @@
 [project]
 name = "deepseek-multi-agent-plugin"
-version = "0.2.0"
+version = "0.3.0"
 description = "Multi-agent collaboration plugin: broadcast, sequential, debate, supervisor and consensus strategies over DeepSeek/OpenAI-compatible LLMs"
 readme = "README.md"
 requires-python = ">=3.9"

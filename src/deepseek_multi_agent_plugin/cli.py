@@ -14,6 +14,7 @@ Examples:
 """
 import argparse
 import json
+import os
 import sys
 
 from .agents import AgentFactory
@@ -83,7 +84,20 @@ def cmd_agents(args) -> int:
 def cmd_serve(args) -> int:
     from .adapter_server import serve
     coord = _build(args)
-    serve(args.host, args.port, coord)
+    session_factory = None
+    if args.config:
+        from .config import build_coordinator, load_config
+        config = load_config(args.config)
+        session_factory = lambda: build_coordinator(config=dict(config))
+    elif args.demo:
+        from .adapter_server import register_demo_agents
+
+        def session_factory():
+            c = AgentCoordinator()
+            register_demo_agents(c)
+            return c
+
+    serve(args.host, args.port, coord, token=args.token, session_factory=session_factory)
     return 0
 
 
@@ -118,6 +132,8 @@ def main(argv=None) -> int:
     p_serve.add_argument("--config", default=None)
     p_serve.add_argument("--demo", action="store_true")
     p_serve.add_argument("--agents", default=None)
+    p_serve.add_argument("--token", default=os.environ.get("DS_AGENT_TOKEN"),
+                         help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
     p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)

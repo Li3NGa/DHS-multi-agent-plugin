@@ -17,6 +17,7 @@ import inspect
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
 
@@ -36,7 +37,7 @@ def _call_agent(agent, message, context=None, timeout=None):
     try:
         fut = ex.submit(agent.handle, message, context)
         return fut.result(timeout=timeout)
-    except TimeoutError:
+    except (TimeoutError, FuturesTimeoutError):
         return {"error": "timeout"}
     except Exception as e:  # noqa: BLE001 - strategy-level resilience
         return {"error": str(e)}
@@ -53,7 +54,7 @@ def _parallel(coord, message, agents=None, context=None, timeout=None) -> Dict[s
     try:
         for f in as_completed(futures, timeout=timeout):
             results[futures[f]] = f.result()
-    except TimeoutError:
+    except (TimeoutError, FuturesTimeoutError):
         pass  # remaining agents are marked below
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
@@ -257,7 +258,7 @@ def run_supervisor(
     try:
         for f in as_completed(futures, timeout=timeout):
             results[futures[f]] = f.result()
-    except TimeoutError:
+    except (TimeoutError, FuturesTimeoutError):
         pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)

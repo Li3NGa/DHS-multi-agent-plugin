@@ -109,7 +109,7 @@ def main(argv=None) -> int:
     p_run = sub.add_parser("run", help="run a multi-agent collaborative task")
     p_run.add_argument("--prompt", required=True, help="task prompt")
     p_run.add_argument("--strategy", default="auto",
-                       choices=["auto", "broadcast", "sequential", "debate", "supervisor", "consensus"])
+                       choices=["auto", "broadcast", "sequential", "debate", "supervisor", "consensus", "relay"])
     p_run.add_argument("--rounds", type=int, default=3)
     p_run.add_argument("--judge", default=None, help="agent name to act as judge (debate/consensus)")
     p_run.add_argument("--order", default=None, help="comma separated agent order (sequential)")

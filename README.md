@@ -18,7 +18,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 ## 特性 / Features
 
-- **5 种开箱即用的协作策略**：广播讨论、顺序流水线（chain-of-agents）、多轮辩论（含裁判）、主管-下属（任务分解与并行执行）、提案-投票共识。
+- **6 种开箱即用的协作策略**：广播讨论、顺序流水线（chain-of-agents）、多轮辩论（含裁判）、主管-下属（任务分解与并行执行）、提案-投票共识、接力迭代（草稿打磨）。
 - **灵活的 Agent 定义**：`mock` / `echo` / `http` / `deepseek` / `openai` / `custom` 六种后端，LLM 调用仅依赖标准库（OpenAI 兼容 `/chat/completions` 协议）。
 - **共享对话记忆**：所有策略共享一个线程安全的 `MessageStore`，每个 Agent 都能看到讨论全程；辩论上下文带发言人标签（`[agent]: ...`），LLM 能分清谁说了什么。
 - **会话隔离**：事件可携带 `session_id`，每个会话获得独立的 Agent 注册表与对话记忆，并发任务互不污染。
@@ -84,6 +84,7 @@ deepseek-multi-agent serve --config example_config.yaml --port 8000
 | `debate` | 多轮辩论，最后裁判（judge）综合所有观点给出结论 | 需要对抗与收敛的决策、评审 |
 | `supervisor` | 主管分解任务为子任务，工人并行执行，主管汇总成最终报告 | 复杂任务拆解与并行执行 |
 | `consensus` | 每个 Agent 提案，全员投票，多数胜出；平票时由裁判裁决 | 需要多数共识的选择题 |
+| `relay` | 按顺序轮流打磨同一份草稿，后一位看到前一位的产出；草稿无变化时提前收敛 | 初稿→润色→审校的迭代打磨 |
 
 > 策略名也可用 `auto`：1 个 Agent 时自动选 `broadcast`，存在名为 `supervisor` 的 Agent 时选
 > `supervisor`，否则选 `debate`。
@@ -213,10 +214,11 @@ result = adapter.handle_harness_event({
 | 文档 | 内容 |
 | --- | --- |
 | [详细使用说明](docs/usage.md) | 安装、配置、CLI / Python API / HTTP 三种用法、接入真实 LLM、FAQ |
-| [协作策略详解](docs/strategies.md) | 5 种策略的流程、参数、返回结构、选型建议 |
+| [协作策略详解](docs/strategies.md) | 6 种策略的流程、参数、返回结构、选型建议 |
 | [Python API 参考](docs/api_reference.md) | 全部类与函数的签名、参数、返回值 |
 | [HTTP 服务接口](docs/http_api.md) | 四个端点的请求/响应协议、curl 示例、安全建议 |
 | [部署指南](docs/deployment.md) | Windows / Docker / systemd 三种部署方式、健康检查、优雅关闭与安全建议 |
+| [MCP 服务器](docs/mcp.md) | 把协作引擎暴露给 DSH / Codex / Claude 等 MCP 宿主，4 个工具 + 对接示例 |
 
 ### Docker 部署 / Docker deployment
 
@@ -227,11 +229,21 @@ docker compose up -d --build
 镜像通过 `HOST`、`PORT`、`CONFIG`、`DEEPSEEK_API_KEY`、`DS_AGENT_TOKEN`
 环境变量配置，健康检查与完整部署说明见 [docs/deployment.md](docs/deployment.md)。
 
+### MCP 集成 / MCP integration
+
+```bash
+python -m deepseek_multi_agent_plugin.mcp_server --config example_config.yaml
+```
+
+通过 stdio JSON-RPC 把 `run` / `agents` / `register` / `status` 四个工具暴露给
+DSH、Codex、Claude Code 等 MCP 宿主，让其他 agent 直接驱动本插件的多智能体协作，
+详见 [docs/mcp.md](docs/mcp.md)。
+
 可直接运行的示例代码在 [examples/](examples/)：
 
 | 示例 | 说明 |
 | --- | --- |
-| [demo_strategies.py](examples/demo_strategies.py) | mock 团队演示全部 5 种策略，无需 API Key |
+| [demo_strategies.py](examples/demo_strategies.py) | mock 团队演示全部 6 种策略，无需 API Key |
 | [demo_deepseek_team.py](examples/demo_deepseek_team.py) | DeepSeek 真实 LLM 三人辩论 |
 | [run_http_server.py](examples/run_http_server.py) | 一键启动 HTTP 适配服务 |
 

@@ -128,7 +128,7 @@ AgentCoordinator(memory: MessageStore | None = None, timeout: float = 15.0)
 run(prompt: str, strategy: str = "auto", **kwargs) -> dict
 ```
 
-- `strategy`：`auto` / `broadcast` / `sequential` / `debate` / `supervisor` / `consensus`；
+- `strategy`：`auto` / `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` / `relay`；
   未知策略 → `ValueError`；没有注册任何 Agent → `RuntimeError`。
 - `**kwargs` 按策略签名过滤后转发（见 [strategies.md](strategies.md)），不认识的参数被忽略。
 - 返回统一结果结构：`{"strategy", "prompt", "rounds", "final", "meta"}`。
@@ -152,6 +152,7 @@ strategies.run_sequential(coord, prompt, order=None, timeout=None)
 strategies.run_debate(coord, prompt, rounds=3, judge=None, timeout=None)
 strategies.run_supervisor(coord, prompt, supervisor=None, workers=None, timeout=None)
 strategies.run_consensus(coord, prompt, judge=None, timeout=None)
+strategies.run_relay(coord, prompt, rounds=2, order=None, timeout=None)
 
 strategies.run_strategy(coord, strategy, prompt, **kwargs)  # 通用分发
 strategies.STRATEGIES                              # 名称 -> 函数 的字典

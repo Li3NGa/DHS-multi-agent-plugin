@@ -287,6 +287,58 @@ def run_supervisor(
 
 
 # --------------------------------------------------------------------------
+# relay: pass-the-baton draft refinement
+# --------------------------------------------------------------------------
+def run_relay(
+    coord,
+    prompt: str,
+    rounds: int = 2,
+    order: Optional[Sequence[str]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Agents polish the same draft in turns, each one seeing the previous
+    output; every agent taking the baton once counts as one round. The run
+    stops early as soon as a round leaves the draft unchanged.
+    """
+    start = time.time()
+    names = [a.name for a in coord.agents] if not order else list(order)
+    if len(names) < 2:
+        raise ValueError("relay needs at least two agents")
+    missing = [n for n in names if coord.get_agent(n) is None]
+    if missing:
+        raise ValueError(f"relay: unknown agents in order: {missing}")
+    records = []
+    draft = str(prompt)
+    _record(coord, "user", prompt)
+    for r in range(1, max(1, int(rounds)) + 1):
+        round_start = draft
+        steps = []
+        for i, name in enumerate(names, 1):
+            message = (
+                f"原始任务：{prompt}\n\n当前草稿：\n{draft}\n\n"
+                "要求：请改进下面这份草稿，只输出改进后的完整草稿。"
+            )
+            resp = _call_agent(coord.get_agent(name), message, timeout=timeout)
+            if not _is_error(resp):
+                draft = str(resp)
+                _record(coord, "assistant", draft, agent=name)
+            steps.append({"step": i, "agent": name, "response": resp})
+        # 每轮的轮初草稿即上一轮的轮末草稿，因此"与轮初相同"同时覆盖
+        # "连续两轮无变化"的收敛条件，无需单独跟踪上一轮。
+        converged = draft == round_start
+        records.append({"round": r, "kind": "relay", "steps": steps, "converged": converged})
+        if converged:
+            break
+    return {
+        "strategy": "relay",
+        "prompt": prompt,
+        "rounds": records,
+        "final": draft,
+        "meta": _meta(coord, start, "relay"),
+    }
+
+
+# --------------------------------------------------------------------------
 # consensus: propose -> vote (majority) -> final
 # --------------------------------------------------------------------------
 def _parse_vote(text: str, candidates: Sequence[str]) -> Optional[str]:
@@ -369,6 +421,7 @@ STRATEGIES = {
     "debate": run_debate,
     "supervisor": run_supervisor,
     "consensus": run_consensus,
+    "relay": run_relay,
 }
 
 

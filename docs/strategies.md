@@ -1,6 +1,6 @@
 # 协作策略详解（Collaboration Strategies）
 
-本文详解 5 种内置协作策略的流程、参数、返回结构与选型建议。所有策略共享统一的结果结构，
+本文档详解 6 种内置协作策略的流程、参数、返回结构与选型建议。所有策略共享统一的结果结构，
 并都会把讨论过程写入协调器的共享记忆（`coord.memory`）。
 
 > 上一级：[详细使用说明](usage.md)
@@ -236,7 +236,78 @@ print(result["rounds"][2]["winner"])  # 胜出者（或走裁判时无此字段�
 
 ---
 
-## 6. auto 策略选择
+## 6. relay — 接力迭代（pass-the-baton draft refinement）
+
+### 流程
+
+1. 初始草稿 = 任务提示词本身；
+2. 按注册顺序（或 `order` 指定顺序）依次调用每个 Agent，传入「原始任务 + 当前草稿 + 改进要求」，
+   每个 Agent 只输出改进后的完整草稿，其输出立即成为新草稿；
+3. 所有 Agent 跑完一遍算一轮；每轮结束时对比轮初与轮末草稿：
+   - 完全相同 → 已收敛，立即提前结束，`converged = true`；
+   - 否则继续下一轮，直到完成 `rounds` 轮或收敛。
+
+### 参数
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `rounds` | 2 | 最大接力轮数 |
+| `order` | 注册顺序 | Agent 接力顺序（Agent 名列表）；名字必须是已注册的 Agent |
+| `timeout` | 协调器默认 | 单步超时（秒） |
+
+### 示例
+
+```bash
+deepseek-multi-agent run --agents 初稿员,润色员,审校员 --strategy relay \
+  --rounds 2 --prompt "写一段产品介绍"
+```
+
+```python
+result = coord.run("写一段产品介绍", strategy="relay", rounds=3,
+                   order=["drafter", "polisher", "reviewer"])
+print(result["rounds"][-1]["converged"])   # 该轮是否收敛
+for step in result["rounds"][0]["steps"]:
+    print(step["agent"], step["response"][:40])
+```
+
+### 过程记录结构
+
+```json
+[
+  {
+    "round": 1,
+    "kind": "relay",
+    "steps": [
+      { "step": 1, "agent": "drafter",   "response": "完整草稿v1" },
+      { "step": 2, "agent": "polisher",  "response": "完整草稿v2" },
+      { "step": 3, "agent": "reviewer",  "response": "完整草稿v3" }
+    ],
+    "converged": false
+  },
+  {
+    "round": 2,
+    "kind": "relay",
+    "steps": [
+      { "step": 1, "agent": "drafter",   "response": "完整草稿v3" },
+      { "step": 2, "agent": "polisher",  "response": "完整草稿v3" },
+      { "step": 3, "agent": "reviewer",  "response": "完整草稿v3" }
+    ],
+    "converged": true
+  }
+]
+```
+
+### 适用场景
+
+- 同一份文案/代码/方案需要多角色依次打磨的创作场景（初稿 → 润色 → 审校 → 定稿）；
+- 希望每一步都在上一位的基础上做增量完善，而不是独立产出；
+- 希望多轮迭代直到稳定（草稿不再变化就自动停，省 token）。
+
+> 注意：至少需要 2 个 Agent，否则抛 `ValueError`；单轮内某 Agent 抛异常会被跳过，草稿保持不变并记录错误。
+
+---
+
+## 7. auto 策略选择
 
 `strategy="auto"`（默认）按以下规则自动选择：
 
@@ -248,7 +319,7 @@ print(result["rounds"][2]["winner"])  # 胜出者（或走裁判时无此字段�
 
 ---
 
-## 7. 选型速查
+## 8. 选型速查
 
 | 你的需求 | 推荐策略 |
 | --- | --- |
@@ -257,4 +328,5 @@ print(result["rounds"][2]["winner"])  # 胜出者（或走裁判时无此字段�
 | 正反对抗后要一个结论 | debate |
 | 大任务拆解 + 并行干活 + 汇总报告 | supervisor |
 | 多方案投票定胜负 | consensus |
+| 多角色接力打磨同一份草稿，改动即收敛 | relay |
 | 不确定选哪个 | auto |

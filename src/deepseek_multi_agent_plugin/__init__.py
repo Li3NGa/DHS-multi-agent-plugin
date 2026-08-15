@@ -3,11 +3,12 @@
 A multi-agent collaboration plugin for the DeepSeek ecosystem: define a
 team of agents (mock, HTTP or LLM-backed) and run them together with one
 of the built-in collaboration strategies - broadcast, sequential, debate,
-supervisor or consensus. An HTTP adapter server and a CLI make the plugin
-easy to drive from the DeepSeek Harness or any other caller.
+supervisor, consensus or relay. An HTTP adapter server, a CLI and an MCP
+stdio server make the plugin easy to drive from the DeepSeek Harness or
+any other MCP-capable agent host.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.1"
 
 from .agents import Agent, AgentFactory, chat_completion
 from .config import build_coordinator, load_config

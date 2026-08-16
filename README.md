@@ -58,9 +58,8 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 ```bash
 # 安装（无需任何运行时依赖）
-# 当前尚未发布到 PyPI，从 Git 安装（固定 v0.4.6 tag）：
-pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.6
-# 配置 PYPI_API_TOKEN 并发布后（见 docs/publishing.md），即可使用 pip install deepseek-multi-agent-plugin
+pip install deepseek-multi-agent-plugin
+# 或从 Git 安装固定版本：pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.8
 
 # 用两个内置 mock Agent 跑一场辩论，无需 API Key
 deepseek-multi-agent run --demo --strategy debate --rounds 2 \

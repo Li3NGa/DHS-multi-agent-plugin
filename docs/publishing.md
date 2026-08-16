@@ -5,9 +5,9 @@
 `pip install deepseek-multi-agent-plugin`，也可以从 GitHub Release 下载
 wheel / sdist。
 
-> ⚠️ 当前状态：本项目**尚未实际发布到 PyPI**（仓库未配置 `PYPI_API_TOKEN`）。
-> 本文档描述的是发布流程；配置 token 并推送 `v*` tag 后才会真正分发。
-> 当前安装请使用 Git：`pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.6`。
+> ✅ 当前状态：**v0.4.8 已发布到 PyPI**（2026-08-16，首次发布）。
+> 安装：`pip install deepseek-multi-agent-plugin`。
+> 后续发布流程：推送 `v*` tag 即自动构建、上传 PyPI 并附加 GitHub Release。
 
 ---
 

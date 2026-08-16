@@ -25,3 +25,8 @@ dist/
 # Logs
 *.log
 .server.pid
+
+# agent probe/debug leftovers
+_probe*.py
+_probe*/
+probe_root/

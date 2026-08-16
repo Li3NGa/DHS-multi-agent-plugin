@@ -48,10 +48,16 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to PyPI
+        if: env.PYPI_API_TOKEN != ''
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           username: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ env.PYPI_API_TOKEN }}
+      - name: Skip PyPI (token not configured)
+        if: env.PYPI_API_TOKEN == ''
+        run: echo "PYPI_API_TOKEN not configured; PyPI publish skipped (see docs/publishing.md)"
 
   release-upload:
     name: Upload assets to GitHub Release

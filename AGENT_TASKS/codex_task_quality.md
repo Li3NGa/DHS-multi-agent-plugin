@@ -4,7 +4,10 @@
 
 ## 1. 仓库当前状态（基线）
 
-- 远端 main = `2e8ce99`（v0.4.4），工作区干净，**110 个测试全绿**；
+- 协调者 DSH 集成批次已提交：`2e8ce99`（v0.4.4）+ `5fe87d3`（契约文件）；
+- **全面放行**：六项优化（策略名单一来源、CLI serve --history、HTTP 请求体上限、
+  常量时间 token 比较、Retry-After 尊重、RunHistory 截断）全部批准，无需拆分等待；
+- 基线远端 main = `5fe87d3`（v0.4.4），**110 个测试全绿**；
 - TraeWork 的 history 改动已由协调者提交推送（`2bb00fa` → `8d8cc8e`），
   **不存在未提交的 TraeWork 改动**，你可以直接修改，无需担心干扰；
 - 本轮协调者新增并已推送：`config.load_dsh_credentials()`（自动读 ~/.dsh/.credentials.yaml）、

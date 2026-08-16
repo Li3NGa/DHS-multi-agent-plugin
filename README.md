@@ -10,7 +10,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 [![CI](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
 > 📚 详细使用文档：[使用指南](docs/usage.md) · [策略详解](docs/strategies.md) · [API 参考](docs/api_reference.md) · [HTTP 接口](docs/http_api.md) · [示例代码](examples/)
 

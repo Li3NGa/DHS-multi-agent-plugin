@@ -3,7 +3,7 @@ name = "deepseek-multi-agent-plugin"
 version = "0.4.2"
 description = "Multi-agent collaboration plugin: broadcast, sequential, debate, supervisor, consensus and relay strategies over DeepSeek/OpenAI-compatible LLMs"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [ { name = "Li3NGa" } ]
 keywords = ["multi-agent", "llm", "deepseek", "collaboration", "orchestration", "plugin"]

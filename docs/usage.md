@@ -13,7 +13,7 @@ Python API / HTTP 服务三种方式运行多智能体协作任务，再到接�
 
 ## 1. 安装与准备
 
-要求：Python >= 3.9（3.10–3.12 经过 CI 验证）。
+要求：Python >= 3.10（3.10 / 3.11 / 3.12 经过 CI 验证）。
 
 ```bash
 pip install deepseek-multi-agent-plugin

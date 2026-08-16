@@ -1,0 +1,22 @@
+# deepseek-multi-agent-plugin 的 DSH 挂载示例（社区安装模板）
+#
+# 用法：把下面条目合并进 ~/.dsh/profiles/<profile>/cordis.patch.yml
+# （若已有 id 为 mcp-multiagent 的条目，请先删除或替换），保存后 DSH 会
+# 热加载（HMR）：设置页「插件」列表出现 mcp-multiagent，对话中即可调用
+# mcp__multiagent__run / mcp__multiagent__agents / mcp__multiagent__register /
+# mcp__multiagent__status / mcp__multiagent__history 工具。
+#
+# 说明：
+# - command 指向安装了本插件的 Python 解释器（pip install deepseek-multi-agent-plugin）；
+# - --config 指向 agent 团队配置文件（可复制 example_config.yaml 修改）；
+# - --history 可选，启用运行历史落盘；
+# - 服务器会自动从 ~/.dsh/.credentials.yaml 加载 DEEPSEEK_API_KEY（无需 env）。
+#
+- insert:
+    - id: mcp-multiagent
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: multiagent
+        transport: stdio
+        command: python
+        args: ['-m', 'deepseek_multi_agent_plugin.mcp_server', '--config', 'C:/Users/admin/deepseek-multi-agent-plugin/example_config.yaml']

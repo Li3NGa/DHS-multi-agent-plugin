@@ -21,10 +21,42 @@ JSON configs work with the standard library alone.
 """
 import json
 import os
+import re
 from typing import Any, Dict, Optional
 
 from .agents import AgentFactory
 from .coordinator import AgentCoordinator
+
+
+def load_dsh_credentials(path: Optional[str] = None) -> Dict[str, str]:
+    """Load API keys from a DSH credentials file (flat YAML: KEY: value).
+
+    Defaults to ~/.dsh/.credentials.yaml (the DeepSeek Harness credential
+    store). Any entry whose key looks like an API key (e.g. DEEPSEEK_API_KEY)
+    is exported to os.environ unless already set, so LLM-backed agents work
+    out of the box when the plugin is mounted inside the DSH host.
+
+    Parsing is regex-based on purpose: no PyYAML dependency required, and
+    the file only ever contains flat key/value lines. Missing files or
+    unreadable lines are ignored.
+    """
+    path = path or os.path.join(os.path.expanduser("~"), ".dsh", ".credentials.yaml")
+    exported: Dict[str, str] = {}
+    if not os.path.exists(path):
+        return exported
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return exported
+    for key, value in re.findall(r"^\s*([A-Z0-9_]+):\s*(\S+)\s*$", text, flags=re.MULTILINE):
+        if not key.endswith("API_KEY"):
+            continue
+        if os.environ.get(key):
+            continue
+        os.environ[key] = value
+        exported[key] = value
+    return exported
 
 
 def load_config(path: str) -> Dict[str, Any]:

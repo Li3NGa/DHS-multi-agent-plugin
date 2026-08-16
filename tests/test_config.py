@@ -1,7 +1,10 @@
 """Tests for config loading and coordinator construction."""
+import os
+
 import pytest
 
 from deepseek_multi_agent_plugin import build_coordinator, load_config
+from deepseek_multi_agent_plugin.config import load_dsh_credentials
 
 
 def test_build_coordinator_from_dict():
@@ -54,3 +57,31 @@ def test_config_path_build(tmp_path):
     p.write_text('{"agents": [{"name": "a", "kind": "echo"}]}', encoding="utf-8")
     coord = build_coordinator(path=str(p))
     assert coord.agent_names == ["a"]
+
+
+def test_load_dsh_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    creds = tmp_path / ".credentials.yaml"
+    creds.write_text(
+        "DEEPSEEK_API_KEY: sk-test-123\nOTHER_THING: x\nOPENAI_API_KEY: sk-oai-456\n",
+        encoding="utf-8",
+    )
+    exported = load_dsh_credentials(str(creds))
+    assert exported == {"DEEPSEEK_API_KEY": "sk-test-123", "OPENAI_API_KEY": "sk-oai-456"}
+    assert os.environ.get("DEEPSEEK_API_KEY") == "sk-test-123"
+
+
+def test_load_dsh_credentials_missing_file(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    exported = load_dsh_credentials("C:/definitely/not/exists/creds.yaml")
+    assert exported == {}
+    assert os.environ.get("DEEPSEEK_API_KEY") is None
+
+
+def test_load_dsh_credentials_keeps_existing_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "already-set")
+    creds = tmp_path / ".credentials.yaml"
+    creds.write_text("DEEPSEEK_API_KEY: sk-ignored\n", encoding="utf-8")
+    exported = load_dsh_credentials(str(creds))
+    assert exported == {}
+    assert os.environ.get("DEEPSEEK_API_KEY") == "already-set"

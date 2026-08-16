@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 
 from .adapter_server import SessionRegistry, register_demo_agents
 from .agents import AgentFactory
-from .config import build_coordinator
+from .config import build_coordinator, load_dsh_credentials
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 
@@ -223,6 +223,7 @@ def main(argv=None) -> None:
 
     logging.basicConfig(level=os.environ.get("MCP_LOG_LEVEL", "ERROR"),
                         stream=sys.stderr)
+    load_dsh_credentials()  # DEEPSEEK_API_KEY from ~/.dsh/.credentials.yaml if present
     if args.config:
         from .config import load_config
         config = load_config(args.config)

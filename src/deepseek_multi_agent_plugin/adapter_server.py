@@ -241,8 +241,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from .config import load_config, load_dsh_credentials
+    load_dsh_credentials()  # DEEPSEEK_API_KEY from ~/.dsh/.credentials.yaml if present
     if args.config:
-        from .config import load_config
         config = load_config(args.config)
         coord = build_coordinator(config=config)
         session_factory = lambda: build_coordinator(config=dict(config))

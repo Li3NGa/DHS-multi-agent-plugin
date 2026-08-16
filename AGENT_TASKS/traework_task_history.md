@@ -1,7 +1,8 @@
-# Trae Agent 任务书：运行结果持久化 + 历史查询（Run History）
+# TraeWork Agent 任务书：运行结果持久化 + 历史查询（Run History）
 
-> 使用方式：在 Trae IDE 中打开本仓库目录（C:\Users\admin\deepseek-multi-agent-plugin），
-> 用 Agent 模式，将本文件内容作为任务交给 Trae Agent 执行。完成后通知协调者审查。
+> 使用方式：在 TRAE SOLO CN（TraeWork）中打开本仓库目录
+> （C:\Users\admin\deepseek-multi-agent-plugin），进入工作模式，将本文件内容
+> 作为任务交给 TraeWork Agent 执行。完成后通知协调者审查。
 
 ## 背景
 
@@ -87,4 +88,4 @@
 - 不要改动 Docker 相关文件（Dockerfile/docker-compose.yml/.dockerignore/docs/deployment.md）与 deploy/ 目录；
 - 不要改动 strategies.py 的策略逻辑（可以 import 但不许改行为）；
 - 保持纯标准库实现、中文注释与文档；
-- 完成后在 AGENT_TASKS/ 写 relay 风格的同名完成报告（trae_task_history_done.md），并用中文总结。
+- 完成后在 AGENT_TASKS/ 写完成报告（traework_task_history_done.md），并用中文总结。

@@ -5,6 +5,10 @@
 `pip install deepseek-multi-agent-plugin`，也可以从 GitHub Release 下载
 wheel / sdist。
 
+> ⚠️ 当前状态：本项目**尚未实际发布到 PyPI**（仓库未配置 `PYPI_API_TOKEN`）。
+> 本文档描述的是发布流程；配置 token 并推送 `v*` tag 后才会真正分发。
+> 当前安装请使用 Git：`pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.6`。
+
 ---
 
 ## 1. 发布流程总览
@@ -14,7 +18,7 @@ wheel / sdist。
 | 步骤 | 操作 | 触发结果 |
 | --- | --- | --- |
 | 1 | 更新版本号并提交（见第 4 节版本号规范） | 代码进入仓库 |
-| 2 | 打标签 `git tag v0.4.2` 并推送 `git push origin v0.4.2` | 触发 `publish.yml` |
+| 2 | 打标签 `git tag v0.4.6` 并推送 `git push origin v0.4.6` | 触发 `publish.yml` |
 | 3 | CI 构建 wheel + sdist，运行 `twine check` | job 1（build-and-publish） |
 | 4 | 发布到 PyPI | job 1 上传 `deepseek-multi-agent-plugin-X.Y.Z` |
 | 5 | 把 `dist/*.whl`、`dist/*.tar.gz` 附加到 GitHub Release | job 2（release-upload） |
@@ -104,12 +108,12 @@ twine upload dist/*
 
 | 文件 | 位置 | 示例 |
 | --- | --- | --- |
-| `pyproject.toml` | `[project] version` | `version = "0.4.2"` |
-| `src/deepseek_multi_agent_plugin/__init__.py` | `__version__` | `__version__ = "0.4.2"` |
+| `pyproject.toml` | `[project] version` | `version = "0.4.6"` |
+| `src/deepseek_multi_agent_plugin/__init__.py` | `__version__` | `__version__ = "0.4.6"` |
 
 tag 命名规则：
 
-- 使用 `vX.Y.Z` 格式（如 `v0.4.2`），`publish.yml` 由 `v*` 标签触发；
+- 使用 `vX.Y.Z` 格式（如 `v0.4.6`），`publish.yml` 由 `v*` 标签触发；
 - tag 应打在版本号已同步更新的提交上；
 - PyPI 不允许重复上传同一版本，发布过的版本不能覆盖修改，只能发布新版本。
 
@@ -164,6 +168,6 @@ git push origin v0.5.0
 
 ## 6. 相关文档
 
-- [详细使用说明](usage.md) — 安装与三种使用方式
+- [详细使用说明](usage.md) — 安装与四种使用方式（Python API / CLI / HTTP / MCP）
 - [部署指南](deployment.md) — Windows / Docker / systemd 部署
 - [README](../README.md) — 项目总览

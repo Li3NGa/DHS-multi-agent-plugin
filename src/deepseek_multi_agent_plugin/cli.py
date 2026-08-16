@@ -24,14 +24,14 @@ from .strategies import STRATEGY_NAMES
 
 
 def _demo_coordinator() -> AgentCoordinator:
-    """Two mock agents so the CLI works without any API key."""
+    """Two mock agents so the CLI works without any API key.
+
+    Reuses the HTTP server's demo team (alpha/beta) so CLI and HTTP demo
+    experiences stay consistent.
+    """
+    from .adapter_server import register_demo_agents
     coord = AgentCoordinator()
-    coord.register_agent(
-        AgentFactory.create_agent('mock', 'researcher', message_template='[研究员] {msg}')
-    )
-    coord.register_agent(
-        AgentFactory.create_agent('mock', 'critic', message_template='[批评家] 我对此有异议: {msg}')
-    )
+    register_demo_agents(coord)
     return coord
 
 
@@ -69,6 +69,7 @@ def cmd_run(args) -> int:
         rounds=args.rounds,
         judge=args.judge,
         order=args.order,
+        workers=args.workers,
         timeout=args.timeout,
     )
     _print_result(result, args.json)
@@ -77,6 +78,9 @@ def cmd_run(args) -> int:
 
 def cmd_agents(args) -> int:
     coord = _build(args)
+    if args.json:
+        print(json.dumps([a.describe() for a in coord.agents], ensure_ascii=False, indent=2))
+        return 0
     for agent in coord.agents:
         print(json.dumps(agent.describe(), ensure_ascii=False))
     return 0
@@ -124,7 +128,8 @@ def main(argv=None) -> int:
                        choices=list(STRATEGY_NAMES))
     p_run.add_argument("--rounds", type=int, default=3)
     p_run.add_argument("--judge", default=None, help="agent name to act as judge (debate/consensus)")
-    p_run.add_argument("--order", default=None, help="comma separated agent order (sequential)")
+    p_run.add_argument("--order", default=None, help="comma separated agent order (sequential/relay)")
+    p_run.add_argument("--workers", default=None, help="comma separated supervisor worker agents")
     p_run.add_argument("--timeout", type=float, default=None, help="per-phase timeout in seconds")
     p_run.add_argument("--config", default=None, help="YAML/JSON config file")
     p_run.add_argument("--demo", action="store_true", help="use two demo mock agents")
@@ -136,6 +141,7 @@ def main(argv=None) -> int:
     p_agents.add_argument("--config", default=None)
     p_agents.add_argument("--demo", action="store_true")
     p_agents.add_argument("--agents", default=None)
+    p_agents.add_argument("--json", action="store_true", help="print a single JSON array")
     p_agents.set_defaults(func=cmd_agents)
 
     p_serve = sub.add_parser("serve", help="run the HTTP adapter server")
@@ -155,8 +161,11 @@ def main(argv=None) -> int:
     p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
-    if args.command == "run" and args.order:
-        args.order = [n.strip() for n in args.order.split(",") if n.strip()]
+    if args.command == "run":
+        if args.order:
+            args.order = [n.strip() for n in args.order.split(",") if n.strip()]
+        if args.workers:
+            args.workers = [n.strip() for n in args.workers.split(",") if n.strip()]
     return args.func(args)
 
 

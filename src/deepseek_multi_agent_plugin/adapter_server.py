@@ -162,7 +162,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
             return
         try:
             result = self.server.adapter.handle_harness_event(event)
-            code = 400 if "error" in result and event.get("type") == "run" else 200
+            code = 400 if "error" in result else 200
             self._send_json(result, code=code)
         except Exception as exc:
             log.exception("adapter error")

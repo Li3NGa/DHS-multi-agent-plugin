@@ -102,7 +102,8 @@ def test_serve_end_to_end_over_stdio():
     stdout = io.StringIO()
     server.serve(stdin=stdin, stdout=stdout)
     lines = [json.loads(l) for l in stdout.getvalue().strip().splitlines()]
-    assert len(lines) == 3  # initialized notification produces no response; bad json skipped
+    assert len(lines) == 4  # initialize + tools/list + tools/call + parse error
     assert lines[0]["result"]["serverInfo"]["name"] == "deepseek-multi-agent-plugin"
     assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status", "history"]
     assert "final" in json.loads(lines[2]["result"]["content"][0]["text"])
+    assert lines[3]["error"]["code"] == -32700

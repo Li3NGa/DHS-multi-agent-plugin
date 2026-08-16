@@ -1,7 +1,7 @@
 # 详细使用说明（Usage Guide）
 
 本指南介绍如何完整使用 `deepseek-multi-agent-plugin`：从安装、配置 Agent 团队，到用命令行 /
-Python API / HTTP 服务三种方式运行多智能体协作任务，再到接入真实 LLM（DeepSeek、OpenAI 或
+Python API / HTTP 服务 / MCP stdio 服务四种方式运行多智能体协作任务，再到接入真实 LLM（DeepSeek、OpenAI 或
 任意兼容端点）。
 
 > 相关文档：
@@ -16,7 +16,9 @@ Python API / HTTP 服务三种方式运行多智能体协作任务，再到接�
 要求：Python >= 3.10（3.10 / 3.11 / 3.12 经过 CI 验证）。
 
 ```bash
-pip install deepseek-multi-agent-plugin
+# 当前尚未发布到 PyPI，从 Git 安装（固定 v0.4.6 tag）：
+pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.6
+# 配置 PYPI_API_TOKEN 并发布后（见 publishing.md），即可使用 pip install deepseek-multi-agent-plugin
 ```
 
 核心功能零运行时依赖（LLM 调用走标准库 urllib）。可选依赖：
@@ -50,7 +52,7 @@ deepseek-multi-agent run --demo --strategy debate --rounds 2 \
 deepseek-multi-agent run --demo --strategy consensus --json --prompt "帮我选个技术栈"
 ```
 
-`--demo` 注册了两个 mock Agent（`researcher`、`critic`），适合先跑通流程、理解策略行为。
+`--demo` 注册了两个 mock Agent（`alpha`、`beta`），适合先跑通流程、理解策略行为。
 
 ---
 
@@ -152,7 +154,8 @@ deepseek-multi-agent run --prompt "任务描述" [选项]
 | `--strategy` | `auto`（默认）/ `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` / `relay` |
 | `--rounds` | 轮数，默认 3 |
 | `--judge` | 裁判 Agent 名（debate/consensus） |
-| `--order` | 逗号分隔的发言顺序（sequential），如 `--order critic,researcher` |
+| `--order` | 逗号分隔的发言顺序（sequential/relay），如 `--order critic,researcher` |
+| `--workers` | 逗号分隔的 supervisor 工人 Agent，如 `--workers w1,w2` |
 | `--timeout` | 每阶段超时秒数 |
 | `--config` | YAML/JSON 配置文件 |
 | `--demo` | 使用两个内置 mock Agent |
@@ -179,6 +182,9 @@ deepseek-multi-agent run --agents 产品,研发,运营 --strategy consensus --pr
 ```bash
 deepseek-multi-agent agents --config example_config.yaml
 # {"name": "researcher", "role": "研究员", "provider": "deepseek", "model": "deepseek-chat", ...}
+
+deepseek-multi-agent agents --config example_config.yaml --json
+# [{"name": "researcher", ...}, {"name": "critic", ...}]
 ```
 
 ### 5.3 `serve` — 启动 HTTP 服务

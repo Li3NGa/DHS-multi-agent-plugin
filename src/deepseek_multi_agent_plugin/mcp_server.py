@@ -200,8 +200,22 @@ class McpServer:
             try:
                 req = json.loads(line)
             except ValueError:
+                if stdout is not None:
+                    stdout.write(json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error"},
+                    }) + "\n")
+                    stdout.flush()
                 continue
             if not isinstance(req, dict):
+                if stdout is not None:
+                    stdout.write(json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32600, "message": "Invalid Request"},
+                    }) + "\n")
+                    stdout.flush()
                 continue
             resp = self.handle_request(req)
             if resp is not None:

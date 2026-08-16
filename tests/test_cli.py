@@ -57,7 +57,21 @@ def test_agents_demo_prints_two_json_lines():
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     assert len(lines) == 2
     agents = [json.loads(line) for line in lines]
-    assert {agent["name"] for agent in agents} == {"researcher", "critic"}
+    assert {agent["name"] for agent in agents} == {"alpha", "beta"}
+
+
+def test_agents_demo_json_array():
+    proc = _run_cli("agents", "--demo", "--json")
+    assert proc.returncode == 0, proc.stderr
+    agents = json.loads(proc.stdout)
+    assert isinstance(agents, list)
+    assert {agent["name"] for agent in agents} == {"alpha", "beta"}
+
+
+def test_run_help_lists_workers():
+    proc = _run_cli("run", "--help")
+    assert proc.returncode == 0, proc.stderr
+    assert "--workers" in proc.stdout
 
 
 def test_serve_help_lists_history_options():

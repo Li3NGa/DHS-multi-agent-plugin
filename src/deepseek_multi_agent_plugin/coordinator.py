@@ -204,7 +204,10 @@ class DeepseekAdapter:
             from .agents import AgentFactory
             added = []
             for cfg in event.get("agents", []):
-                agent = AgentFactory.from_config(cfg)
+                try:
+                    agent = AgentFactory.from_config(cfg)
+                except Exception as exc:  # noqa: BLE001 - report config errors on the wire
+                    return {"error": f"invalid agent config: {exc}"}
                 coord.register_agent(agent)
                 added.append(agent.name)
             return {"registered": added}

@@ -149,6 +149,26 @@ def test_not_found():
         server.server_close()
 
 
+def test_register_invalid_agent_returns_400():
+    server = _start_server()
+    try:
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/register",
+            data=json.dumps({"type": "register", "agents": [{}]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected HTTP error")
+        except urlreq.HTTPError as exc:
+            assert exc.code == 400
+            body = json.loads(exc.read().decode())
+            assert "invalid agent config" in body["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_build_server_shuts_down_cleanly():
     coord = AgentCoordinator()
     register_demo_agents(coord)

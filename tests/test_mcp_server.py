@@ -28,6 +28,16 @@ def test_initialize():
     assert resp["result"]["serverInfo"]["name"] == "deepseek-multi-agent-plugin"
 
 
+def test_initialize_negotiates_supported_version():
+    resp = _rpc(_server(), "initialize", {"protocolVersion": "2025-06-18"})
+    assert resp["result"]["protocolVersion"] == "2025-06-18"
+
+
+def test_initialize_falls_back_on_unknown_version():
+    resp = _rpc(_server(), "initialize", {"protocolVersion": "2099-01-01"})
+    assert resp["result"]["protocolVersion"] == "2025-03-26"
+
+
 def test_tools_list():
     resp = _rpc(_server(), "tools/list")
     names = [t["name"] for t in resp["result"]["tools"]]

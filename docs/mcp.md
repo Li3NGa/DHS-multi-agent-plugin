@@ -6,7 +6,8 @@ Agent 宿主（DSH Harness 的 dsh-mcp-client、Codex、Claude Code/Desktop、Tr
 辩论/接力/主管等协作策略，并拿回最终结论。
 
 > 实现文件：`src/deepseek_multi_agent_plugin/mcp_server.py`（纯标准库，
-> newline-delimited JSON-RPC over stdin/stdout，协议版本 2025-03-26）。
+> newline-delimited JSON-RPC over stdin/stdout，协议版本 2025-03-26；
+> initialize 时支持版本协商：客户端请求受支持版本则回该版本，否则回默认 2025-03-26）。
 
 ## 1. 启动
 

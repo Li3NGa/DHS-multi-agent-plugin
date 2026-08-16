@@ -35,6 +35,15 @@ from .strategies import STRATEGY_NAMES
 log = logging.getLogger("deepseek-multi-agent-plugin.mcp")
 
 PROTOCOL_VERSION = "2025-03-26"
+# 实测来自本机 @modelcontextprotocol/sdk 的 SUPPORTED_PROTOCOL_VERSIONS
+# （LATEST_PROTOCOL_VERSION = 2025-11-25）。
+SUPPORTED_PROTOCOL_VERSIONS = {
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25",
+    "2024-11-05",
+    "2024-10-07",
+}
 
 _STRATEGIES = list(STRATEGY_NAMES)
 
@@ -141,8 +150,11 @@ class McpServer:
         method = req.get("method", "")
         req_id = req.get("id")
         if method == "initialize":
+            params = req.get("params") or {}
+            requested = params.get("protocolVersion", PROTOCOL_VERSION)
+            negotiated = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
             return self._result(req_id, {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": negotiated,
                 "capabilities": {"tools": {}},
                 "serverInfo": {
                     "name": "deepseek-multi-agent-plugin",

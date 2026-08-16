@@ -27,8 +27,10 @@ import hmac
 import json
 import logging
 import os
+import re
 import signal
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from typing import Callable, Dict, Optional, Tuple
@@ -41,6 +43,19 @@ from .history import RunHistory
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
 MAX_REQUEST_BYTES = 1024 * 1024
+
+
+def redact(text: str) -> str:
+    """脱敏日志文本中的凭据。
+
+    覆盖两种形态（均为正则、不依赖上下文）：
+    1. ``Authorization: Bearer <token>`` 中的 token；
+    2. 常见的 ``sk-`` / ``ghp-`` / ``pypi-`` 前缀 API token。
+    匹配到的敏感片段统一替换为 ``***``。
+    """
+    text = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text)
+    text = re.sub(r"\b(?:sk|ghp|pypi)-[A-Za-z0-9_-]+", "***", text)
+    return text
 
 
 class SessionRegistry:
@@ -165,11 +180,14 @@ class AdapterHandler(BaseHTTPRequestHandler):
             code = 400 if "error" in result else 200
             self._send_json(result, code=code)
         except Exception as exc:
-            log.exception("adapter error")
-            self._send_json({"error": "adapter error", "detail": str(exc)}, code=500)
+            # 记录完整异常（含 traceback），但先整体脱敏，避免凭据进入日志。
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            log.error("adapter error:\n%s", redact(tb))
+            # 不把异常原文/内部提示词回给调用方，只记录到服务端日志。
+            self._send_json({"error": "adapter error", "detail": "internal adapter error"}, code=500)
 
     def log_message(self, fmt, *args):
-        log.info("%s - %s", self.address_string(), fmt % args)
+        log.info("%s - %s", self.address_string(), redact(fmt % args))
 
 
 def register_demo_agents(coordinator: AgentCoordinator) -> None:

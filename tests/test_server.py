@@ -1,5 +1,6 @@
 """Integration tests for the HTTP adapter server."""
 import json
+import logging
 import threading
 from http.server import ThreadingHTTPServer
 from urllib import request as urlreq
@@ -232,6 +233,49 @@ def test_token_auth_required():
                 raise AssertionError("expected 401 with wrong token")
         except urlreq.HTTPError as exc:
             assert exc.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_log_message_redacts_bearer_token(caplog):
+    caplog.set_level(logging.INFO, logger="deepseek-multi-agent-plugin")
+    handler = object.__new__(AdapterHandler)
+    handler.address_string = lambda: "127.0.0.1"
+    handler.log_message('"%s" Authorization: Bearer %s', "GET /run HTTP/1.1", "sk-test-123")
+    assert "sk-test-123" not in caplog.text
+    assert "Bearer ***" in caplog.text
+
+
+def test_adapter_exception_detail_is_fixed_and_redacted(caplog):
+    caplog.set_level(logging.INFO, logger="deepseek-multi-agent-plugin")
+    server = build_server("127.0.0.1", 0, AgentCoordinator(), token="sk-test-123")
+
+    def boom(event):
+        raise RuntimeError("boom sk-test-123")
+
+    server.adapter.handle_harness_event = boom
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/run",
+            data=json.dumps({"type": "run", "prompt": "hi", "strategy": "broadcast"}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer sk-test-123",
+            },
+        )
+        try:
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected HTTP error")
+        except urlreq.HTTPError as exc:
+            assert exc.code == 500
+            body = json.loads(exc.read().decode())
+            assert body["detail"] == "internal adapter error"
+            assert "boom" not in body["detail"]
+            assert "sk-test-123" not in body["detail"]
+        assert "sk-test-123" not in caplog.text
     finally:
         server.shutdown()
         server.server_close()

@@ -58,7 +58,11 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 
 ```bash
 # 安装（无需任何运行时依赖）
-pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin
+# 已发布 PyPI（推荐）：
+pip install deepseek-multi-agent-plugin
+
+# 或从 Git 安装（固定 v0.4.2 tag）：
+pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.2
 
 # 用两个内置 mock Agent 跑一场辩论，无需 API Key
 deepseek-multi-agent run --demo --strategy debate --rounds 2 \
@@ -220,6 +224,7 @@ result = adapter.handle_harness_event({
 | [HTTP 服务接口](docs/http_api.md) | 四个端点的请求/响应协议、curl 示例、安全建议 |
 | [部署指南](docs/deployment.md) | Windows / Docker / systemd 三种部署方式、健康检查、优雅关闭与安全建议 |
 | [MCP 服务器](docs/mcp.md) | 把协作引擎暴露给 DSH / Codex / Claude 等 MCP 宿主，4 个工具 + 对接示例 |
+| [发布指南](docs/publishing.md) | PyPI / GitHub Release 双通道发布流程、PYPI_API_TOKEN 配置、版本号规范与常见问题 |
 
 ### Docker 部署 / Docker deployment
 

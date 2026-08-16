@@ -11,6 +11,7 @@ Tools exposed (server-qualified by the host, e.g. mcp__multiagent__run):
   agents     -> list registered agents
   register   -> register agents from config dicts
   status     -> adapter status summary
+  history    -> recent run records (when started with --history)
 
 Usage:
 
@@ -28,6 +29,7 @@ from .adapter_server import SessionRegistry, register_demo_agents
 from .agents import AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
+from .history import RunHistory
 
 log = logging.getLogger("deepseek-multi-agent-plugin.mcp")
 
@@ -86,6 +88,15 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Adapter status: agent names, auto strategy, session count.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    "history": {
+        "description": "查询最近的多智能体协作运行历史（需服务以 --history 启动），返回最新在前的记录列表。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "description": "返回最近 N 条记录（默认 20）。"},
+            },
+        },
+    },
 }
 
 
@@ -118,6 +129,10 @@ class McpServer:
             if registry is not None:
                 out["sessions"] = len(registry)
             return out
+        if name == "history":
+            return self.adapter.handle_harness_event(
+                {"type": "history", "limit": args.get("limit")}
+            )
         raise ValueError(f"unknown tool: {name}")
 
     # -- JSON-RPC plumbing ----------------------------------------------
@@ -203,6 +218,7 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="MCP stdio server (multi-agent plugin)")
     parser.add_argument("--config", default=None, help="YAML/JSON agent config file")
     parser.add_argument("--demo", action="store_true", help="register demo mock agents")
+    parser.add_argument("--history", default=None, help="run history JSONL file (enables the history tool)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=os.environ.get("MCP_LOG_LEVEL", "ERROR"),
@@ -225,7 +241,8 @@ def main(argv=None) -> None:
     else:
         coord = AgentCoordinator()
         registry = _session_registry()
-    McpServer(DeepseekAdapter(coord, registry=registry)).serve()
+    history = RunHistory(args.history) if args.history else None
+    McpServer(DeepseekAdapter(coord, registry=registry, history=history)).serve()
 
 
 if __name__ == "__main__":

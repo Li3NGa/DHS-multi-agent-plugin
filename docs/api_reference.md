@@ -190,7 +190,7 @@ agents:
 ## 7. DeepseekAdapter（Harness 事件翻译）
 
 ```python
-DeepseekAdapter(coordinator: AgentCoordinator)
+DeepseekAdapter(coordinator: AgentCoordinator, registry=None, history: RunHistory | None = None)
 adapter.handle_harness_event(event: dict) -> dict
 ```
 
@@ -200,6 +200,7 @@ adapter.handle_harness_event(event: dict) -> dict
 | `agents` | `{"type": "agents"}` | `{"agents": [describe()...]}` |
 | `status` | `{"type": "status"}` | `{"status": "ok", "agents": [...], "strategy": ...}` |
 | `register` | `{"type": "register", "agents": [配置dict...]}` | `{"registered": [名字...]}` |
+| `history` | `{"type": "history", "limit": 10}` | `{"records": [...]}`（未启用时 `{"records": [], "enabled": false}`） |
 | 其他 | — | `{"error": "unsupported event type: ..."}` |
 
 ---
@@ -230,3 +231,24 @@ main(argv=None) -> None                        # argparse 入口：--host --port
 ```
 
 服务端点协议见 [HTTP 服务接口](http_api.md)。
+---
+
+## 10. RunHistory（运行历史，history 模块）
+
+```python
+from deepseek_multi_agent_plugin import RunHistory
+
+h = RunHistory("runs.jsonl")        # 文件不存在时自动创建（含父目录）
+h.append({"strategy": "debate", "prompt": "你好", "final": "..."})
+                                    # 自动补充自增 index 与 ISO 8601 本地时间 timestamp
+h.recent(limit=20)                  # 最近 20 条，倒序（最新在前）
+len(h)                              # 记录条数
+h.clear()                           # 清空文件并重置序号
+```
+
+- 追加与读取共用一把锁，多线程并发 `append` 不会丢记录；
+- 记录字段由调用方决定；`DeepseekAdapter` 在 `run` 事件成功后自动写入
+  摘要（`strategy` / `prompt` / `final` / `rounds` / `session_id` /
+  `elapsed_seconds`），失败不记录；
+- 通过 `DeepseekAdapter(coord, history=h)`、HTTP `--history FILE` 或 MCP
+  `--history FILE` 启用。

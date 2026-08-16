@@ -6,6 +6,7 @@ Endpoints:
   GET  /agents     -> registered agents
   POST /run        -> {"type": "run", "prompt": "...", "strategy": "...", ...}
   POST /register   -> {"type": "register", "agents": [{name, kind, ...}]}
+  GET  /history    -> recent run records (when started with --history)
 
 Events may carry an optional ``session_id``; sessions get isolated
 coordinators (own agent registry + shared memory) via SessionRegistry, so
@@ -30,10 +31,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from typing import Callable, Dict, Optional, Tuple
+from urllib.parse import parse_qs
 
 from .agents import Agent, AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
+from .history import RunHistory
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
 
@@ -102,10 +105,29 @@ class AdapterHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "unauthorized"}, code=401)
             return
         if self.path.split("?")[0] == "/health":
-            self._send_json({"status": "ok"})
+            out = {"status": "ok"}
+            history = getattr(self.server.adapter, "history", None)
+            if history is not None:
+                out["history"] = "on"
+                out["history_count"] = len(history)
+            self._send_json(out)
         elif self.path.split("?")[0] == "/agents":
             adapter = self.server.adapter
             self._send_json({"agents": [a.describe() for a in adapter.coordinator.agents]})
+        elif self.path.split("?")[0] == "/history":
+            history = getattr(self.server.adapter, "history", None)
+            if history is None:
+                self._send_json({"records": [], "enabled": False})
+                return
+            limit = 20
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            values = parse_qs(query).get("limit")
+            if values:
+                try:
+                    limit = max(1, int(values[0]))
+                except ValueError:
+                    pass
+            self._send_json({"records": history.recent(limit)})
         else:
             self._send_json({"error": "not found"}, code=404)
 
@@ -150,6 +172,7 @@ def build_server(
     coordinator: AgentCoordinator,
     token: Optional[str] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
+    history: Optional[RunHistory] = None,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
@@ -161,7 +184,7 @@ def build_server(
     # graceful shutdown; daemon threads let ``server_close`` return promptly.
     server.daemon_threads = True
     registry = SessionRegistry(factory=session_factory) if session_factory else None
-    server.adapter = DeepseekAdapter(coordinator, registry=registry)
+    server.adapter = DeepseekAdapter(coordinator, registry=registry, history=history)
     server.auth_token = token
     return server
 
@@ -172,8 +195,10 @@ def serve(
     coordinator: AgentCoordinator,
     token: Optional[str] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
+    history: Optional[RunHistory] = None,
 ) -> None:
-    server = build_server(host, port, coordinator, token=token, session_factory=session_factory)
+    server = build_server(host, port, coordinator, token=token,
+                           session_factory=session_factory, history=history)
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
              host, port, coordinator.agent_names,
              "on" if token else "off",
@@ -210,6 +235,8 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser.add_argument("--demo", action="store_true", help="register demo mock agents")
     parser.add_argument("--token", default=os.environ.get("DS_AGENT_TOKEN"),
                         help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
+    parser.add_argument("--history", default=os.environ.get("DS_HISTORY_FILE"),
+                        help="run history JSONL file (default: $DS_HISTORY_FILE; unset = disabled)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -231,7 +258,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     else:
         coord = AgentCoordinator()
         session_factory = None
-    serve(args.host, args.port, coord, token=args.token, session_factory=session_factory)
+    history = RunHistory(args.history) if args.history else None
+    serve(args.host, args.port, coord, token=args.token,
+          session_factory=session_factory, history=history)
 
 
 if __name__ == "__main__":

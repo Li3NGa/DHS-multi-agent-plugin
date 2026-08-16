@@ -31,7 +31,7 @@ def test_initialize():
 def test_tools_list():
     resp = _rpc(_server(), "tools/list")
     names = [t["name"] for t in resp["result"]["tools"]]
-    assert names == ["run", "agents", "register", "status"]
+    assert names == ["run", "agents", "register", "status", "history"]
     run_tool = resp["result"]["tools"][0]
     assert run_tool["inputSchema"]["required"] == ["prompt"]
     assert "debate" in run_tool["inputSchema"]["properties"]["strategy"]["enum"]
@@ -104,5 +104,5 @@ def test_serve_end_to_end_over_stdio():
     lines = [json.loads(l) for l in stdout.getvalue().strip().splitlines()]
     assert len(lines) == 3  # initialized notification produces no response; bad json skipped
     assert lines[0]["result"]["serverInfo"]["name"] == "deepseek-multi-agent-plugin"
-    assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status"]
+    assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status", "history"]
     assert "final" in json.loads(lines[2]["result"]["content"][0]["text"])

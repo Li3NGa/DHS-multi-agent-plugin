@@ -27,6 +27,7 @@ deepseek-multi-agent serve --config example_config.yaml --port 8000
 | `--port` | 端口，默认 `8000` |
 | `--config` | YAML/JSON 配置文件（指定后忽略 `--demo`） |
 | `--demo` | 注册 `alpha`、`beta` 两个 mock Agent |
+| `--history` | 运行历史 JSONL 文件路径（默认取环境变量 `DS_HISTORY_FILE`；未设置则不启用持久化） |
 
 ---
 
@@ -38,6 +39,7 @@ deepseek-multi-agent serve --config example_config.yaml --port 8000
 | `/agents` | GET | 列出已注册 Agent |
 | `/run` | POST | 执行一次协作任务 |
 | `/register` | POST | 动态注册 Agent（运行中扩员） |
+| `/history` | GET | 查询最近运行历史（需 `--history` 启动） |
 
 所有响应均为 JSON（`application/json; charset=utf-8`）。
 
@@ -167,6 +169,7 @@ Agent 字段与配置文件的 `agents` 段一致（见 [usage.md](usage.md) 第
 | --- | --- | --- |
 | `status` | `{"type": "status"}` | `{"status": "ok", "agents": [...], "strategy": ...}` |
 | `agents` | `{"type": "agents"}` | `{"agents": [...]}` |
+| `history` | `{"type": "history", "limit": 10}` | `{"records": [...]}`（最新在前；未启用时 `{"records": [], "enabled": false}`） |
 
 ```bash
 curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d '{"type": "status"}'
@@ -204,4 +207,21 @@ def call_plugin(prompt, strategy="supervisor", rounds=3, port=8000):
 
 result = call_plugin("写一份校园社团招新方案")
 print(result["final"])
+```
+---
+
+## 10. 运行历史持久化（GET /history）
+
+启动时指定 `--history FILE`（或环境变量 `DS_HISTORY_FILE`）后：
+
+- 每次 `POST /run` 成功执行都会自动把结果摘要追加到该 JSONL 文件
+  （失败不记录），字段包括 `strategy`、`prompt`、`final`、`rounds`（轮数）、
+  `session_id`、`elapsed_seconds`、`index`（自增序号）与 `timestamp`；
+- `GET /history?limit=N` 返回最近 N 条记录（倒序，最新在前），默认 20；
+- `GET /health` 附加 `"history": "on"` 与当前记录条数 `history_count`；
+- 未启用时 `GET /history` 返回 `{"records": [], "enabled": false}`。
+
+```bash
+python -m deepseek_multi_agent_plugin.adapter_server --port 8000 --demo --history runs.jsonl
+curl -s "localhost:8000/history?limit=5"
 ```

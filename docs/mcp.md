@@ -16,6 +16,9 @@ python -m deepseek_multi_agent_plugin.mcp_server --demo
 
 # 加载配置文件团队
 python -m deepseek_multi_agent_plugin.mcp_server --config example_config.yaml
+
+# 启用运行历史持久化（新增 history 工具）
+python -m deepseek_multi_agent_plugin.mcp_server --demo --history runs.jsonl
 ```
 
 服务从 stdin 读取 JSON-RPC 请求、向 stdout 写响应（一行一个 JSON），
@@ -29,6 +32,7 @@ python -m deepseek_multi_agent_plugin.mcp_server --config example_config.yaml
 | `agents` | 列出已注册 agent（name/role/provider/model） | `session_id`（可选） |
 | `register` | 动态注册 agent（与 HTTP register 事件同构） | `agents`（必填）、`session_id`（可选） |
 | `status` | 状态摘要（agent 列表、auto 策略、会话数） | — |
+| `history` | 查询最近的协作运行历史（需 `--history` 启动） | `limit`（可选，默认 20） |
 
 `strategy` 枚举：`auto` / `broadcast` / `sequential` / `debate` / `supervisor` /
 `consensus` / `relay`。

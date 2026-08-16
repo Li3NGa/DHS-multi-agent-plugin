@@ -114,6 +114,8 @@ class DeepseekAdapter:
     - {"type": "agents"}            -> registered agents
     - {"type": "status"}            -> status summary
     - {"type": "register", "agents": [{name, kind, ...}]}  -> register from config dicts
+    - {"type": "history", "limit": int}                     -> recent run records
+      (only when a RunHistory was provided at construction)
 
     When a ``registry`` (a SessionRegistry or any callable mapping
     session ids to coordinators) is provided and an event carries a
@@ -122,15 +124,30 @@ class DeepseekAdapter:
     Events without ``session_id`` keep using the default coordinator.
     """
 
-    def __init__(self, coordinator: AgentCoordinator, registry=None):
+    def __init__(self, coordinator: AgentCoordinator, registry=None, history=None):
         self.coordinator = coordinator
         self.registry = registry
+        self.history = history
 
     def _coordinator_for(self, event: Dict[str, Any]) -> AgentCoordinator:
         session_id = event.get("session_id")
         if session_id and self.registry is not None:
             return self.registry.get_or_create(session_id)
         return self.coordinator
+
+    def _record_history(self, event: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """run 成功后把结果摘要写入 RunHistory（若启用）；失败不记录。"""
+        if self.history is None or not isinstance(result, dict) or "error" in result:
+            return
+        meta = result.get("meta") or {}
+        self.history.append({
+            "strategy": result.get("strategy"),
+            "prompt": result.get("prompt", event.get("prompt", "")),
+            "final": result.get("final"),
+            "rounds": len(result.get("rounds") or []),
+            "session_id": event.get("session_id"),
+            "elapsed_seconds": meta.get("elapsed_seconds"),
+        })
 
     def handle_harness_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         t = event.get("type")
@@ -143,11 +160,13 @@ class DeepseekAdapter:
             for key in ("rounds", "judge", "order", "workers", "timeout"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
-            return coord.run(
+            result = coord.run(
                 prompt,
                 strategy=event.get("strategy", "auto"),
                 **kwargs,
             )
+            self._record_history(event, result)
+            return result
         if t == "agents":
             return {"agents": [a.describe() for a in coord.agents]}
         if t == "status":
@@ -164,4 +183,12 @@ class DeepseekAdapter:
                 coord.register_agent(agent)
                 added.append(agent.name)
             return {"registered": added}
+        if t == "history":
+            if self.history is None:
+                return {"records": [], "enabled": False}
+            try:
+                limit = int(event.get("limit") or 20)
+            except (TypeError, ValueError):
+                limit = 20
+            return {"records": self.history.recent(limit)}
         return {"error": f"unsupported event type: {t}"}

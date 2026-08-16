@@ -233,6 +233,25 @@ coord.memory.clear()               # 清空
 - 并行阶段整体超时：未完成的 Agent 记为 `{"error": "timeout"}`。
 - `run()` 会忽略策略不认识的额外关键字参数（如给 broadcast 传 `judge`），方便统一调用。
 
+### 6.5 运行历史（RunHistory）
+
+把每次协作任务的结果摘要持久化为 JSONL，服务重启后仍可查询：
+
+```python
+from deepseek_multi_agent_plugin import AgentCoordinator, AgentFactory, DeepseekAdapter, RunHistory
+
+coord = AgentCoordinator()
+coord.register_agent(AgentFactory.create_agent('mock', 'a', message_template='A: {msg}'))
+history = RunHistory('runs.jsonl')
+adapter = DeepseekAdapter(coord, history=history)
+
+adapter.handle_harness_event({'type': 'run', 'prompt': '任务', 'strategy': 'broadcast'})
+print(history.recent(5))   # 最近 5 条记录，最新在前
+```
+
+HTTP 与 MCP 服务用 `--history FILE` 启动即可（见 [HTTP 服务接口](http_api.md)、
+[MCP 服务器](mcp.md)）。
+
 完整签名与说明见 [Python API 参考](api_reference.md)。
 
 ---

@@ -20,6 +20,7 @@ import sys
 from .agents import AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator
+from .strategies import STRATEGY_NAMES
 
 
 def _demo_coordinator() -> AgentCoordinator:
@@ -83,6 +84,7 @@ def cmd_agents(args) -> int:
 
 def cmd_serve(args) -> int:
     from .adapter_server import serve
+    from .history import RunHistory
     coord = _build(args)
     session_factory = None
     if args.config:
@@ -97,7 +99,17 @@ def cmd_serve(args) -> int:
             register_demo_agents(c)
             return c
 
-    serve(args.host, args.port, coord, token=args.token, session_factory=session_factory)
+    history = RunHistory(args.history) if args.history else None
+    serve(
+        args.host,
+        args.port,
+        coord,
+        token=args.token,
+        session_factory=session_factory,
+        history=history,
+        history_prompt_limit=args.history_prompt_limit,
+        history_final_limit=args.history_final_limit,
+    )
     return 0
 
 
@@ -109,7 +121,7 @@ def main(argv=None) -> int:
     p_run = sub.add_parser("run", help="run a multi-agent collaborative task")
     p_run.add_argument("--prompt", required=True, help="task prompt")
     p_run.add_argument("--strategy", default="auto",
-                       choices=["auto", "broadcast", "sequential", "debate", "supervisor", "consensus", "relay"])
+                       choices=list(STRATEGY_NAMES))
     p_run.add_argument("--rounds", type=int, default=3)
     p_run.add_argument("--judge", default=None, help="agent name to act as judge (debate/consensus)")
     p_run.add_argument("--order", default=None, help="comma separated agent order (sequential)")
@@ -134,6 +146,12 @@ def main(argv=None) -> int:
     p_serve.add_argument("--agents", default=None)
     p_serve.add_argument("--token", default=os.environ.get("DS_AGENT_TOKEN"),
                          help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
+    p_serve.add_argument("--history", default=os.environ.get("DS_HISTORY_FILE"),
+                         help="run history JSONL file (default: $DS_HISTORY_FILE; unset = disabled)")
+    p_serve.add_argument("--history-prompt-limit", type=int, default=None,
+                         help="truncate persisted prompts to N chars (default: no truncation)")
+    p_serve.add_argument("--history-final-limit", type=int, default=None,
+                         help="truncate persisted final answers to N chars (default: no truncation)")
     p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)

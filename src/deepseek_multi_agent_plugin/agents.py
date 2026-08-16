@@ -31,6 +31,7 @@ from .memory import MessageStore
 # --------------------------------------------------------------------------
 # HTTP statuses worth retrying (rate limit + transient server errors).
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+MAX_BACKOFF_SECONDS = 8.0
 
 
 def chat_completion(
@@ -76,11 +77,24 @@ def chat_completion(
         )
         try:
             with request.urlopen(req, timeout=timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
+                try:
+                    body = json.loads(resp.read().decode("utf-8"))
+                except ValueError:
+                    if attempt < retries:
+                        time.sleep(min(backoff * (2 ** attempt), MAX_BACKOFF_SECONDS))
+                        continue
+                    raise
             break
         except urlerror.HTTPError as exc:
             if exc.code in RETRYABLE_STATUS and attempt < retries:
-                time.sleep(backoff * (2 ** attempt))
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                delay = backoff * (2 ** attempt)
+                if retry_after is not None:
+                    try:
+                        delay = max(delay, float(retry_after))
+                    except ValueError:
+                        pass
+                time.sleep(min(delay, MAX_BACKOFF_SECONDS))
                 continue
             raise
         except (urlerror.URLError, TimeoutError, OSError):

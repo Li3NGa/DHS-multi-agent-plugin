@@ -1,6 +1,8 @@
 """Tests for Agent and AgentFactory."""
 import json
 import threading
+import urllib.error
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -101,6 +103,57 @@ def test_deepseek_provider_missing_key_raises(monkeypatch):
     agent = AgentFactory.create_agent('deepseek', 'ds')
     with pytest.raises(RuntimeError):
         agent.handle("q")
+
+
+def _http_error(code, headers=None):
+    msg = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return urllib.error.HTTPError(
+        "http://example.invalid/chat/completions", code, "error", msg, None
+    )
+
+
+def test_chat_completion_respects_retry_after(monkeypatch):
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) == 1:
+            raise _http_error(429, {"Retry-After": "2"})
+        return _FakeResp(body)
+
+    sleeps = []
+    monkeypatch.setattr(agents_mod.time, "sleep", sleeps.append)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=1, backoff=0.5,
+    )
+    assert out == "ok"
+    assert len(calls) == 2
+    assert sleeps == [2.0]  # Retry-After wins over exponential backoff
+
+
+def test_chat_completion_retries_on_bad_json(monkeypatch):
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) == 1:
+            return _FakeResp(b"not json")
+        return _FakeResp(body)
+
+    monkeypatch.setattr(agents_mod.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=1, backoff=0.0,
+    )
+    assert out == "ok"
+    assert len(calls) == 2
 
 
 class _EchoHandler(BaseHTTPRequestHandler):

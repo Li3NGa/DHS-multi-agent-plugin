@@ -425,6 +425,9 @@ STRATEGIES = {
     "relay": run_relay,
 }
 
+# Single source of truth for CLI/MCP choices ("auto" first, then the registry).
+STRATEGY_NAMES = ("auto", *STRATEGIES)
+
 
 def run_strategy(coord, strategy: str, prompt: str, **kwargs) -> Dict[str, Any]:
     """Dispatch to a named strategy (raises ValueError on unknown names)."""

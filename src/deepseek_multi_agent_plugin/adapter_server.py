@@ -23,6 +23,7 @@ The server uses only the Python standard library. Example:
        -d '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
 """
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -39,6 +40,7 @@ from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
+MAX_REQUEST_BYTES = 1024 * 1024
 
 
 class SessionRegistry:
@@ -85,10 +87,15 @@ class AdapterHandler(BaseHTTPRequestHandler):
         if not token:
             return True
         header = self.headers.get("Authorization") or ""
-        return header == f"Bearer {token}"
+        return hmac.compare_digest(header, f"Bearer {token}")
 
     def _read_event(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length > MAX_REQUEST_BYTES:
+            raise ValueError("request body too large")
         raw = self.rfile.read(length) if length else b""
         if not raw:
             return {}
@@ -124,7 +131,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
             values = parse_qs(query).get("limit")
             if values:
                 try:
-                    limit = max(1, int(values[0]))
+                    limit = min(500, max(1, int(values[0])))
                 except ValueError:
                     pass
             self._send_json({"records": history.recent(limit)})
@@ -140,9 +147,18 @@ class AdapterHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, code=404)
             return
         try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._send_json({"error": "invalid Content-Length"}, code=400)
+            return
+        if length > MAX_REQUEST_BYTES:
+            self._send_json({"error": "request body too large"}, code=413)
+            return
+        try:
             event = self._read_event()
         except ValueError as exc:
-            self._send_json({"error": str(exc)}, code=400)
+            code = 413 if "too large" in str(exc) else 400
+            self._send_json({"error": str(exc)}, code=code)
             return
         try:
             result = self.server.adapter.handle_harness_event(event)
@@ -173,6 +189,8 @@ def build_server(
     token: Optional[str] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
     history: Optional[RunHistory] = None,
+    history_prompt_limit: Optional[int] = None,
+    history_final_limit: Optional[int] = None,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
@@ -184,7 +202,13 @@ def build_server(
     # graceful shutdown; daemon threads let ``server_close`` return promptly.
     server.daemon_threads = True
     registry = SessionRegistry(factory=session_factory) if session_factory else None
-    server.adapter = DeepseekAdapter(coordinator, registry=registry, history=history)
+    server.adapter = DeepseekAdapter(
+        coordinator,
+        registry=registry,
+        history=history,
+        history_prompt_limit=history_prompt_limit,
+        history_final_limit=history_final_limit,
+    )
     server.auth_token = token
     return server
 
@@ -196,9 +220,19 @@ def serve(
     token: Optional[str] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
     history: Optional[RunHistory] = None,
+    history_prompt_limit: Optional[int] = None,
+    history_final_limit: Optional[int] = None,
 ) -> None:
-    server = build_server(host, port, coordinator, token=token,
-                           session_factory=session_factory, history=history)
+    server = build_server(
+        host,
+        port,
+        coordinator,
+        token=token,
+        session_factory=session_factory,
+        history=history,
+        history_prompt_limit=history_prompt_limit,
+        history_final_limit=history_final_limit,
+    )
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
              host, port, coordinator.agent_names,
              "on" if token else "off",
@@ -237,6 +271,10 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
                         help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
     parser.add_argument("--history", default=os.environ.get("DS_HISTORY_FILE"),
                         help="run history JSONL file (default: $DS_HISTORY_FILE; unset = disabled)")
+    parser.add_argument("--history-prompt-limit", type=int, default=None,
+                        help="truncate persisted prompts to N chars (default: no truncation)")
+    parser.add_argument("--history-final-limit", type=int, default=None,
+                        help="truncate persisted final answers to N chars (default: no truncation)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -261,7 +299,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
         session_factory = None
     history = RunHistory(args.history) if args.history else None
     serve(args.host, args.port, coord, token=args.token,
-          session_factory=session_factory, history=history)
+          session_factory=session_factory, history=history,
+          history_prompt_limit=args.history_prompt_limit,
+          history_final_limit=args.history_final_limit)
 
 
 if __name__ == "__main__":

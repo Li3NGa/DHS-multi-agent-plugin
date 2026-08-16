@@ -97,6 +97,26 @@ def test_adapter_failed_run_not_recorded(tmp_path):
     assert len(h) == 0
 
 
+def test_adapter_history_truncates_prompt_and_final(tmp_path):
+    h = RunHistory(str(tmp_path / "runs.jsonl"))
+    coord = AgentCoordinator()
+    register_demo_agents(coord)
+    adapter = DeepseekAdapter(
+        coord,
+        history=h,
+        history_prompt_limit=5,
+        history_final_limit=3,
+    )
+    result = adapter.handle_harness_event(
+        {"type": "run", "prompt": "这是一个很长的任务提示词", "strategy": "broadcast", "rounds": 1}
+    )
+    assert "error" not in result
+    rec = h.recent()[0]
+    assert rec["prompt"] == "这是一个很…"
+    assert rec["prompt"].endswith("…")
+    assert len(rec["final"]) == 4  # 3 chars + ellipsis
+
+
 # -- HTTP 端点 ---------------------------------------------------------------
 def _http_server(history=None):
     coord = AgentCoordinator()

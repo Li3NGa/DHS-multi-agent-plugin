@@ -124,10 +124,19 @@ class DeepseekAdapter:
     Events without ``session_id`` keep using the default coordinator.
     """
 
-    def __init__(self, coordinator: AgentCoordinator, registry=None, history=None):
+    def __init__(
+        self,
+        coordinator: AgentCoordinator,
+        registry=None,
+        history=None,
+        history_prompt_limit: Optional[int] = None,
+        history_final_limit: Optional[int] = None,
+    ):
         self.coordinator = coordinator
         self.registry = registry
         self.history = history
+        self.history_prompt_limit = history_prompt_limit
+        self.history_final_limit = history_final_limit
 
     def _coordinator_for(self, event: Dict[str, Any]) -> AgentCoordinator:
         session_id = event.get("session_id")
@@ -140,14 +149,30 @@ class DeepseekAdapter:
         if self.history is None or not isinstance(result, dict) or "error" in result:
             return
         meta = result.get("meta") or {}
+        prompt = result.get("prompt", event.get("prompt", ""))
+        final = result.get("final")
+        prompt = self._truncate(prompt, self.history_prompt_limit)
+        final = self._truncate(final, self.history_final_limit)
         self.history.append({
             "strategy": result.get("strategy"),
-            "prompt": result.get("prompt", event.get("prompt", "")),
-            "final": result.get("final"),
+            "prompt": prompt,
+            "final": final,
             "rounds": len(result.get("rounds") or []),
             "session_id": event.get("session_id"),
             "elapsed_seconds": meta.get("elapsed_seconds"),
         })
+
+    @staticmethod
+    def _truncate(value: Any, limit: Optional[int]) -> Any:
+        """Truncate string fields for privacy/volume control (None = keep as-is)."""
+        if limit is None or not isinstance(value, str):
+            return value
+        limit = max(0, int(limit))
+        if limit == 0:
+            return ""
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "…"
 
     def handle_harness_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         t = event.get("type")

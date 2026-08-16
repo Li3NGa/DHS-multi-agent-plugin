@@ -30,12 +30,13 @@ from .agents import AgentFactory
 from .config import build_coordinator, load_dsh_credentials
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
+from .strategies import STRATEGY_NAMES
 
 log = logging.getLogger("deepseek-multi-agent-plugin.mcp")
 
 PROTOCOL_VERSION = "2025-03-26"
 
-_STRATEGIES = ["auto", "broadcast", "sequential", "debate", "supervisor", "consensus", "relay"]
+_STRATEGIES = list(STRATEGY_NAMES)
 
 _TOOLS: Dict[str, Dict[str, Any]] = {
     "run": {
@@ -219,6 +220,10 @@ def main(argv=None) -> None:
     parser.add_argument("--config", default=None, help="YAML/JSON agent config file")
     parser.add_argument("--demo", action="store_true", help="register demo mock agents")
     parser.add_argument("--history", default=None, help="run history JSONL file (enables the history tool)")
+    parser.add_argument("--history-prompt-limit", type=int, default=None,
+                        help="truncate persisted prompts to N chars (default: no truncation)")
+    parser.add_argument("--history-final-limit", type=int, default=None,
+                        help="truncate persisted final answers to N chars (default: no truncation)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=os.environ.get("MCP_LOG_LEVEL", "ERROR"),
@@ -243,7 +248,13 @@ def main(argv=None) -> None:
         coord = AgentCoordinator()
         registry = _session_registry()
     history = RunHistory(args.history) if args.history else None
-    McpServer(DeepseekAdapter(coord, registry=registry, history=history)).serve()
+    McpServer(DeepseekAdapter(
+        coord,
+        registry=registry,
+        history=history,
+        history_prompt_limit=args.history_prompt_limit,
+        history_final_limit=args.history_final_limit,
+    )).serve()
 
 
 if __name__ == "__main__":

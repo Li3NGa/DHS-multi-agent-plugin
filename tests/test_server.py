@@ -4,6 +4,7 @@ import threading
 from http.server import ThreadingHTTPServer
 from urllib import request as urlreq
 
+import deepseek_multi_agent_plugin.adapter_server as adapter_mod
 from deepseek_multi_agent_plugin.adapter_server import AdapterHandler, build_server, register_demo_agents
 from deepseek_multi_agent_plugin.coordinator import AgentCoordinator, DeepseekAdapter
 
@@ -159,3 +160,58 @@ def test_build_server_shuts_down_cleanly():
     server.server_close()
     thread.join(timeout=3)
     assert not thread.is_alive()
+
+
+def test_oversized_body_returns_413(monkeypatch):
+    monkeypatch.setattr(adapter_mod, "MAX_REQUEST_BYTES", 64)
+    server = _start_server()
+    try:
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/run",
+            data=b"x" * 128,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected HTTP error")
+        except urlreq.HTTPError as exc:
+            assert exc.code == 413
+            body = json.loads(exc.read().decode())
+            assert body == {"error": "request body too large"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_token_auth_required():
+    coord = AgentCoordinator()
+    register_demo_agents(coord)
+    server = build_server("127.0.0.1", 0, coord, token="s3cret")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        try:
+            _get(server, "/health")
+            raise AssertionError("expected 401 without token")
+        except urlreq.HTTPError as exc:
+            assert exc.code == 401
+
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/health",
+            headers={"Authorization": "Bearer s3cret"},
+        )
+        with urlreq.urlopen(req, timeout=10) as resp:
+            assert json.loads(resp.read().decode()) == {"status": "ok"}
+
+        try:
+            req = urlreq.Request(
+                f"http://127.0.0.1:{server.server_port}/health",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected 401 with wrong token")
+        except urlreq.HTTPError as exc:
+            assert exc.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -15,7 +15,9 @@ AgentFactory builds agents from kind strings or config dicts so that
 YAML/JSON configuration can describe whole agent teams.
 """
 import json
+import math
 import os
+import random
 import subprocess
 import time
 from threading import Lock
@@ -34,6 +36,34 @@ RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 MAX_BACKOFF_SECONDS = 8.0
 
 
+def _max_backoff_seconds() -> float:
+    """重试退避上限：默认 MAX_BACKOFF_SECONDS，可用环境变量覆盖。
+
+    DSMA_MAX_BACKOFF_SECONDS 解析失败或为非法非正值（含 NaN/Inf）时，
+    静默回退默认值，避免配置错误导致退避失效或线程异常阻塞。
+    """
+    raw = os.environ.get("DSMA_MAX_BACKOFF_SECONDS")
+    if raw is None:
+        return MAX_BACKOFF_SECONDS
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return MAX_BACKOFF_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        return MAX_BACKOFF_SECONDS
+    return value
+
+
+def _retry_delay(attempt: int, backoff: float, max_backoff: float) -> float:
+    """第 attempt 次重试的全抖动（full jitter）延迟。
+
+    上限为指数退避 min(backoff * 2**attempt, max_backoff)，在 [0, 上限] 内
+    均匀随机采样，避免大量客户端在同一时刻扎堆重试（雷群效应）。
+    """
+    cap = min(backoff * (2 ** attempt), max_backoff)
+    return random.uniform(0.0, cap)
+
+
 def chat_completion(
     base_url: str,
     api_key: str,
@@ -50,7 +80,9 @@ def chat_completion(
     """Call POST {base_url}/chat/completions and return the reply text.
 
     Transient failures (HTTP 429/5xx, connection/timeout errors) are retried
-    up to ``retries`` times with exponential backoff.
+    up to ``retries`` times with full-jitter exponential backoff, whose ceiling
+    defaults to ``MAX_BACKOFF_SECONDS`` and can be overridden via the
+    ``DSMA_MAX_BACKOFF_SECONDS`` environment variable.
 
     With ``return_usage=True`` returns ``{"content": str, "usage": dict}``
     instead of just the content string, so callers can track token usage.
@@ -66,6 +98,7 @@ def chat_completion(
     if response_format is not None:
         payload["response_format"] = response_format
     body: Dict[str, Any] = {}
+    max_backoff = _max_backoff_seconds()
     for attempt in range(max(0, retries) + 1):
         req = request.Request(
             url,
@@ -81,25 +114,33 @@ def chat_completion(
                     body = json.loads(resp.read().decode("utf-8"))
                 except ValueError:
                     if attempt < retries:
-                        time.sleep(min(backoff * (2 ** attempt), MAX_BACKOFF_SECONDS))
+                        time.sleep(_retry_delay(attempt, backoff, max_backoff))
                         continue
                     raise
             break
         except urlerror.HTTPError as exc:
             if exc.code in RETRYABLE_STATUS and attempt < retries:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
-                delay = backoff * (2 ** attempt)
+                delay = _retry_delay(attempt, backoff, max_backoff)
+                retry_after_seconds = None
                 if retry_after is not None:
                     try:
-                        delay = max(delay, float(retry_after))
+                        retry_after_seconds = float(retry_after)
                     except ValueError:
-                        pass
-                time.sleep(min(delay, MAX_BACKOFF_SECONDS))
+                        pass  # 非数字 Retry-After（如 HTTP-date）无法解析：仅用抖动延迟
+                if retry_after_seconds is not None:
+                    # Retry-After 是服务端要求的最低等待时间，先与全抖动延迟取
+                    # max，再直接封顶在 max_backoff。这里不选择再乘 0.5~1.0
+                    # 抖动：乘法抖动可能把实际睡眠压到 Retry-After 之下，违背
+                    # 服务端意图；封顶则可避免异常大的 Retry-After 让线程长
+                    # 时间阻塞（与旧实现 min(...) 封顶行为保持一致）。
+                    delay = min(max(delay, retry_after_seconds), max_backoff)
+                time.sleep(delay)
                 continue
             raise
         except (urlerror.URLError, TimeoutError, OSError):
             if attempt < retries:
-                time.sleep(backoff * (2 ** attempt))
+                time.sleep(_retry_delay(attempt, backoff, max_backoff))
                 continue
             raise
     try:

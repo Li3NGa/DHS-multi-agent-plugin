@@ -51,19 +51,48 @@ class RunHistory:
             return item
 
     def recent(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """读取最近 limit 条记录（倒序，最新在前）。"""
+        """读取最近 limit 条记录（倒序，最新在前）。
+
+        从文件尾部按块向前扫描，凑齐 limit 条有效记录（或扫到文件头）即停，
+        避免大历史文件全量读取。以二进制方式打开并用 errors="replace" 解码，
+        损坏行（非 JSON）依旧跳过；返回语义与旧实现完全一致。
+        """
         with self._lock:
+            limit = max(0, int(limit))
+            if limit == 0:
+                return []
             items: List[Dict[str, Any]] = []
-            with open(self.path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        items.append(json.loads(line))
-                    except ValueError:
-                        continue  # 跳过损坏行
-        return list(reversed(items))[: max(0, int(limit))]
+            with open(self.path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                pos = f.tell()
+                if pos == 0:
+                    return []
+                chunk = b""  # 尚未拆分出完整行的尾部字节缓冲
+                block_size = 4096
+                while pos > 0 and len(items) < limit:
+                    read_size = min(block_size, pos)
+                    pos -= read_size
+                    f.seek(pos)
+                    chunk = f.read(read_size) + chunk
+                    parts = chunk.split(b"\n")
+                    if pos > 0:
+                        # 尚未到达文件头：块首可能是不完整的行，留给下一轮拼接
+                        chunk = parts[0]
+                        parts = parts[1:]
+                    else:
+                        # 已到达文件头：剩余字节都是完整内容（含末尾无换行的行）
+                        chunk = b""
+                    # 块内行按逆序处理，保证最新记录在最前
+                    for raw in reversed(parts):
+                        if not raw.strip():
+                            continue
+                        try:
+                            items.append(json.loads(raw.decode("utf-8", errors="replace")))
+                        except ValueError:
+                            continue  # 跳过损坏行
+                        if len(items) >= limit:
+                            break
+        return items
 
     def clear(self) -> None:
         """清空历史文件并重置序号。"""

@@ -136,6 +136,100 @@ def test_chat_completion_respects_retry_after(monkeypatch):
     assert sleeps == [2.0]  # Retry-After wins over exponential backoff
 
 
+def test_chat_completion_full_jitter_with_exponential_ceiling(monkeypatch):
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) <= 2:
+            raise urllib.error.URLError("boom")
+        return _FakeResp(body)
+
+    sleeps = []
+    # 把 uniform 固定在区间上界，验证全抖动按 min(backoff*2**attempt, 8.0) 封顶
+    monkeypatch.setattr(agents_mod.random, "uniform", lambda low, high: high)
+    monkeypatch.setattr(agents_mod.time, "sleep", sleeps.append)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=2, backoff=1.0,
+    )
+    assert out == "ok"
+    assert len(calls) == 3
+    assert sleeps == [1.0, 2.0]  # attempt 0/1 的指数上限（未触及 8.0 默认封顶）
+
+
+def test_chat_completion_env_overrides_max_backoff(monkeypatch):
+    monkeypatch.setenv("DSMA_MAX_BACKOFF_SECONDS", "1.5")
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) == 1:
+            raise urllib.error.URLError("boom")
+        return _FakeResp(body)
+
+    sleeps = []
+    monkeypatch.setattr(agents_mod.random, "uniform", lambda low, high: high)
+    monkeypatch.setattr(agents_mod.time, "sleep", sleeps.append)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=1, backoff=10.0,
+    )
+    assert out == "ok"
+    assert sleeps == [1.5]  # min(10*2**0, 1.5)：环境变量封顶生效
+
+
+def test_chat_completion_invalid_env_max_backoff_falls_back(monkeypatch):
+    monkeypatch.setenv("DSMA_MAX_BACKOFF_SECONDS", "not-a-number")
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) == 1:
+            raise urllib.error.URLError("boom")
+        return _FakeResp(body)
+
+    sleeps = []
+    monkeypatch.setattr(agents_mod.random, "uniform", lambda low, high: high)
+    monkeypatch.setattr(agents_mod.time, "sleep", sleeps.append)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=1, backoff=10.0,
+    )
+    assert out == "ok"
+    assert sleeps == [8.0]  # 环境变量解析失败静默回退默认上限 8.0
+
+
+def test_chat_completion_retry_after_capped_at_max_backoff(monkeypatch):
+    monkeypatch.setenv("DSMA_MAX_BACKOFF_SECONDS", "1.0")
+    body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if len(calls) == 1:
+            raise _http_error(429, {"Retry-After": "5"})
+        return _FakeResp(body)
+
+    sleeps = []
+    monkeypatch.setattr(agents_mod.random, "uniform", lambda low, high: 0.0)
+    monkeypatch.setattr(agents_mod.time, "sleep", sleeps.append)
+    monkeypatch.setattr(agents_mod.request, "urlopen", fake_urlopen)
+    out = agents_mod.chat_completion(
+        "http://x", "k", "m", [{"role": "user", "content": "q"}],
+        retries=1, backoff=0.5,
+    )
+    assert out == "ok"
+    assert len(calls) == 2
+    assert sleeps == [1.0]  # max(抖动延迟, 5) 直接封顶在环境变量上限 1.0
+
+
 def test_chat_completion_retries_on_bad_json(monkeypatch):
     body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
     calls = []

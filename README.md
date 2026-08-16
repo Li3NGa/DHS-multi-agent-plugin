@@ -24,6 +24,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 - **会话隔离**：事件可携带 `session_id`，每个会话获得独立的 Agent 注册表与对话记忆，并发任务互不污染。
 - **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作；超时不再阻塞等待慢 Agent；LLM 调用对 429/5xx 与网络抖动自动指数退避重试。
 - **Token 用量统计与结构化输出**：按 Agent 累计 `usage`（prompt/completion/total tokens，汇总进 `meta.usage`）；`Agent.chat()` 支持 `response_format`（如 JSON 模式）透传。
+- **上下文压缩 / 响应缓存 / Token 计量**：`ContextPolicy` 支持历史窗口、逐条截断、辩论中隐藏己方旧发言（默认关闭，不改变既有行为）；进程内线程安全 LRU 响应缓存（`--cache`）；`meta.usage` 汇总为 `total` / `agents` / `cache_hits`。
 - **HTTP 服务鉴权**：`--token`（或环境变量 `DS_AGENT_TOKEN`）启用 `Authorization: Bearer <token>` 校验。
 - **四种使用方式**：Python API、命令行（`deepseek-multi-agent`）、HTTP 适配服务（可对接 DeepSeek Harness 等外部系统）、MCP stdio 服务（供 DSH / Codex / Claude 等 MCP 宿主调用）。
 - **零运行时依赖**（可选安装 PyYAML 以支持 YAML 配置），测试与 CI 完整。

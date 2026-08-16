@@ -49,7 +49,7 @@ def _build(args) -> AgentCoordinator:
     return coord
 
 
-def _print_result(result, as_json: bool) -> None:
+def _print_result(result, as_json: bool, show_usage: bool = False) -> None:
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -59,20 +59,34 @@ def _print_result(result, as_json: bool) -> None:
         print(json.dumps(rec, ensure_ascii=False, indent=2))
     print("== FINAL ==")
     print(result["final"])
+    if show_usage:
+        usage = (result.get("meta") or {}).get("usage")
+        if usage is not None:
+            print("== USAGE ==")
+            print(json.dumps(usage, ensure_ascii=False, indent=2))
 
 
 def cmd_run(args) -> int:
+    from .context import ContextPolicy
+
     coord = _build(args)
-    result = coord.run(
-        args.prompt,
-        strategy=args.strategy,
-        rounds=args.rounds,
-        judge=args.judge,
-        order=args.order,
-        workers=args.workers,
-        timeout=args.timeout,
-    )
-    _print_result(result, args.json)
+    run_kwargs = {
+        "strategy": args.strategy,
+        "rounds": args.rounds,
+        "judge": args.judge,
+        "order": args.order,
+        "workers": args.workers,
+        "timeout": args.timeout,
+    }
+    if args.context_window is not None or args.context_max_chars is not None:
+        run_kwargs["context"] = ContextPolicy(
+            window=args.context_window,
+            max_chars=args.context_max_chars,
+        )
+    if args.cache:
+        run_kwargs["cache"] = True
+    result = coord.run(args.prompt, **run_kwargs)
+    _print_result(result, args.json, show_usage=args.usage)
     return 0
 
 
@@ -131,6 +145,14 @@ def main(argv=None) -> int:
     p_run.add_argument("--order", default=None, help="comma separated agent order (sequential/relay)")
     p_run.add_argument("--workers", default=None, help="comma separated supervisor worker agents")
     p_run.add_argument("--timeout", type=float, default=None, help="per-phase timeout in seconds")
+    p_run.add_argument("--context-window", type=int, default=None,
+                       help="keep only the most recent N history messages (default: off)")
+    p_run.add_argument("--context-max-chars", type=int, default=None,
+                       help="truncate each history message to N chars (default: off)")
+    p_run.add_argument("--cache", action="store_true",
+                       help="enable the in-process LLM response cache")
+    p_run.add_argument("--usage", action="store_true",
+                       help="print meta.usage summary after FINAL (non-JSON mode)")
     p_run.add_argument("--config", default=None, help="YAML/JSON config file")
     p_run.add_argument("--demo", action="store_true", help="use two demo mock agents")
     p_run.add_argument("--agents", default=None, help="comma separated mock agent names")

@@ -25,6 +25,7 @@ import re
 from typing import Any, Dict, Optional
 
 from .agents import AgentFactory
+from .context import ContextPolicy
 from .coordinator import AgentCoordinator
 
 
@@ -95,7 +96,17 @@ def build_coordinator(
         config = load_config(path)
     cfg: Dict[str, Any] = config if config is not None else {}
     coord_cfg = cfg.get("coordinator") or {}
-    coord = AgentCoordinator(timeout=float(coord_cfg.get("timeout_seconds", 15.0)))
+    context_policy = ContextPolicy.from_dict(coord_cfg.get("context"))
+    cache = coord_cfg.get("cache", False)
+    if isinstance(cache, str):
+        cache = cache.strip().lower() in ("1", "true", "yes", "on")
+    coord = AgentCoordinator(
+        timeout=float(coord_cfg.get("timeout_seconds", 15.0)),
+        context_policy=context_policy,
+        cache=bool(cache),
+    )
     for acfg in cfg.get("agents") or []:
         coord.register_agent(AgentFactory.from_config(acfg))
+    if coord.cache:
+        coord._apply_cache(True)
     return coord

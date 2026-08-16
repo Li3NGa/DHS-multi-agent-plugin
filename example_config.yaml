@@ -10,6 +10,12 @@ coordinator:
   strategy: debate
   rounds: 3
   timeout_seconds: 30
+  # 上下文压缩与效率开关（全部默认关闭，不写这段则完全不压缩）
+  context:
+    window: 6          # 可选：只保留最近 6 条历史消息（原始 prompt 始终保留、不截断）
+    max_chars: 2000    # 可选：每条历史消息保留前 2000 个字符并追加省略号 "…"
+    hide_own: false    # 可选：辩论中辩手看不到自己之前的旧发言
+  cache: false         # 可选：启用进程内 LLM 响应缓存（线程安全 LRU，默认 128 条）
 
 agents:
   - name: researcher

@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from .agents import Agent
+from .context import ContextPolicy
 from .memory import MessageStore
 
 
@@ -23,11 +24,19 @@ class AgentCoordinator:
     immutable snapshot).
     """
 
-    def __init__(self, memory: Optional[MessageStore] = None, timeout: float = 15.0):
+    def __init__(
+        self,
+        memory: Optional[MessageStore] = None,
+        timeout: float = 15.0,
+        context_policy: Optional[ContextPolicy] = None,
+        cache: bool = False,
+    ):
         self._agents: Dict[str, Agent] = {}
         self._lock = RLock()
         self.memory = memory if memory is not None else MessageStore()
         self.timeout = timeout
+        self.context_policy = context_policy
+        self.cache = bool(cache)
 
     # -- registry ---------------------------------------------------------
     def register_agent(self, agent: Agent, replace: bool = True) -> None:
@@ -71,13 +80,41 @@ class AgentCoordinator:
 
         Extra kwargs (rounds, judge, order, workers, timeout, ...) are
         forwarded to the strategy function.
+
+        Two extra run-level switches are consumed by the coordinator itself:
+
+        - ``context``: a ``ContextPolicy`` instance or a dict with
+          ``window`` / ``max_chars`` / ``hide_own`` keys; overrides the
+          coordinator-level policy for this run.
+        - ``cache``: bool; enables (or disables) the in-process LLM response
+          cache on the registered LLM agents for this run.
         """
         from . import strategies  # local import keeps module graph acyclic
+        context = kwargs.pop("context", None)
+        cache = kwargs.pop("cache", None)
+        if context is not None:
+            if isinstance(context, ContextPolicy):
+                self.context_policy = context
+            else:
+                self.context_policy = ContextPolicy.from_dict(context)
+        if cache is not None:
+            self.cache = bool(cache)
+            self._apply_cache(self.cache)
         if not self._agents:
             raise RuntimeError("no agents registered")
         if (strategy or "").lower() == "auto":
             strategy = self._auto_strategy()
         return strategies.run_strategy(self, strategy, prompt, **kwargs)
+
+    def _apply_cache(self, enabled: bool) -> None:
+        """为已注册的 LLM agent 打开/关闭进程内响应缓存。"""
+        for agent in self.agents:
+            if agent.provider is None:
+                continue
+            agent.cache = bool(enabled)
+            if enabled and agent._cache is None:
+                from .agents import ResponseCache
+                agent._cache = ResponseCache()
 
     def _auto_strategy(self) -> str:
         """Heuristic: 1 agent -> broadcast; a "supervisor" agent present
@@ -110,7 +147,8 @@ class DeepseekAdapter:
 
     - {"type": "run", "prompt": str, "strategy": str, "rounds": int,
        "judge": str, "order": [names], "workers": [names], "timeout": float,
-       "session_id": str (optional)}
+       "context": {"window": int, "max_chars": int, "hide_own": bool} (optional),
+       "cache": bool (optional), "session_id": str (optional)}
     - {"type": "agents"}            -> registered agents
     - {"type": "status"}            -> status summary
     - {"type": "register", "agents": [{name, kind, ...}]}  -> register from config dicts
@@ -185,6 +223,11 @@ class DeepseekAdapter:
             for key in ("rounds", "judge", "order", "workers", "timeout"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
+            # 上下文压缩与缓存开关（run 事件可选字段，直接透传给 coordinator.run）
+            if event.get("context") is not None:
+                kwargs["context"] = event["context"]
+            if event.get("cache") is not None:
+                kwargs["cache"] = event["cache"]
             result = coord.run(
                 prompt,
                 strategy=event.get("strategy", "auto"),

@@ -8,10 +8,11 @@ stdio server make the plugin easy to drive from the DeepSeek Harness or
 any other MCP-capable agent host.
 """
 
-__version__ = "0.4.8"
+__version__ = "0.5.0"
 
-from .agents import Agent, AgentFactory, chat_completion
+from .agents import Agent, AgentFactory, ResponseCache, chat_completion
 from .config import build_coordinator, load_config
+from .context import ContextPolicy, build_context, truncate
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 from .memory import MessageStore
@@ -21,12 +22,16 @@ __all__ = [
     "Agent",
     "AgentCoordinator",
     "AgentFactory",
+    "ContextPolicy",
     "DeepseekAdapter",
     "MessageStore",
+    "ResponseCache",
     "RunHistory",
     "build_coordinator",
+    "build_context",
     "chat_completion",
     "load_config",
+    "truncate",
     "strategies",
     "__version__",
 ]

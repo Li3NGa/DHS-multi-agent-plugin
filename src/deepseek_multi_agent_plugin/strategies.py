@@ -20,6 +20,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
+from .context import build_context, truncate
+
+
+def _policy(coord):
+    """读取协调器上的上下文策略（未配置时为 None）。"""
+    return getattr(coord, "context_policy", None)
+
+
+def _max_chars(coord) -> Optional[int]:
+    """读取策略中的逐条截断上限（未配置时为 None）。"""
+    policy = _policy(coord)
+    return policy.max_chars if policy is not None else None
+
 
 def _call_agent(agent, message, context=None, timeout=None):
     """Call one agent; exceptions are returned as {"error": ...} dicts.
@@ -45,12 +58,33 @@ def _call_agent(agent, message, context=None, timeout=None):
         ex.shutdown(wait=False, cancel_futures=True)
 
 
-def _parallel(coord, message, agents=None, context=None, timeout=None) -> Dict[str, Any]:
-    """Ask every agent in parallel; errors are captured per agent."""
+def _parallel(
+    coord,
+    message,
+    agents=None,
+    context=None,
+    contexts=None,
+    timeout=None,
+) -> Dict[str, Any]:
+    """Ask every agent in parallel; errors are captured per agent.
+
+    ``context`` is shared by every agent; ``contexts`` is an optional
+    ``{agent_name: chat_messages}`` mapping that overrides the shared context
+    per agent (used by debate to give each debater a customized view).
+    """
     targets = agents if agents is not None else coord.agents
     results: Dict[str, Any] = {}
     ex = ThreadPoolExecutor(max_workers=max(1, len(targets)))
-    futures = {ex.submit(_call_agent, a, message, context, timeout): a.name for a in targets}
+    futures = {
+        ex.submit(
+            _call_agent,
+            a,
+            message,
+            contexts.get(a.name, context) if contexts is not None else context,
+            timeout,
+        ): a.name
+        for a in targets
+    }
     try:
         for f in as_completed(futures, timeout=timeout):
             results[futures[f]] = f.result()
@@ -81,18 +115,28 @@ def _record(coord, role: str, content: Any, agent: Optional[str] = None):
 
 
 def _meta(coord, start: float, strategy: str) -> Dict[str, Any]:
-    usage = {
-        a.name: dict(a.total_usage)
-        for a in coord.agents
-        if getattr(a, "total_usage", {}).get("total_tokens")
-    }
+    """构建运行元信息；usage 升级为 {total, agents, cache_hits} 汇总形状。"""
+    agents_usage: Dict[str, Dict[str, int]] = {}
+    totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    cache_hits = 0
+    for a in coord.agents:
+        usage = getattr(a, "total_usage", {}) or {}
+        if usage.get("total_tokens"):
+            agents_usage[a.name] = dict(usage)
+            for key in totals:
+                totals[key] += usage.get(key, 0) or 0
+        cache_hits += int(getattr(a, "cache_hits", 0) or 0)
     meta: Dict[str, Any] = {
         "elapsed_seconds": round(time.time() - start, 3),
         "agents": [a.name for a in coord.agents],
         "strategy": strategy,
+        # v0.5.0：usage 恒存在（零值填充），JSON 输出总能拿到计量摘要
+        "usage": {
+            "total": totals,
+            "agents": agents_usage,
+            "cache_hits": cache_hits,
+        },
     }
-    if usage:
-        meta["usage"] = usage
     return meta
 
 
@@ -105,14 +149,21 @@ def run_broadcast(coord, prompt: str, rounds: int = 1, timeout: Optional[float] 
     start = time.time()
     records = []
     last = prompt
+    max_chars = _max_chars(coord)
+    total_rounds = max(1, int(rounds))
     _record(coord, "user", prompt)
-    for r in range(1, max(1, int(rounds)) + 1):
+    for r in range(1, total_rounds + 1):
         responses = _parallel(coord, last, timeout=timeout)
         for name, resp in responses.items():
             if not _is_error(resp):
                 _record(coord, "assistant", resp, agent=name)
         records.append({"round": r, "kind": "broadcast", "responses": responses})
-        last = _join(responses, fallback=last)
+        joined = _join(responses, fallback=last)
+        if max_chars is not None and r < total_rounds:
+            # 回喂消息按 max_chars 截断（prompt 前缀保留）；final 结论永不截断
+            last = truncate(f"{prompt}\n\n{joined}", max_chars)
+        else:
+            last = joined
     return {
         "strategy": "broadcast",
         "prompt": prompt,
@@ -140,13 +191,16 @@ def run_sequential(
         raise ValueError(f"sequential: unknown agents in order: {missing}")
     records = []
     transcript = str(prompt)
+    max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
     for i, name in enumerate(names, 1):
         resp = _call_agent(coord.get_agent(name), transcript, timeout=timeout)
         if not _is_error(resp):
             _record(coord, "assistant", resp, agent=name)
         records.append({"step": i, "agent": name, "response": resp})
-        transcript = f"{transcript}\n\n[{name}]: {resp}"
+        next_transcript = f"{transcript}\n\n[{name}]: {resp}"
+        # 传给下一棒的 transcript 按 max_chars 截断（prompt 前缀保留）
+        transcript = truncate(next_transcript, max_chars) if max_chars is not None else next_transcript
     final = records[-1]["response"] if records else prompt
     return {
         "strategy": "sequential",
@@ -175,11 +229,22 @@ def run_debate(
     names = [a.name for a in coord.agents]
     if len(names) < 2:
         raise ValueError("debate needs at least two agents")
+    policy = _policy(coord)
+    max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
     last_responses = {}
     for r in range(1, max(1, int(rounds)) + 1):
-        context = coord.memory.to_chat(with_speaker=True)
-        responses = _parallel(coord, prompt, context=context, timeout=timeout)
+        if policy is not None:
+            # 按策略为每位辩手生成定制 context（窗口/截断/隐藏己方旧发言）
+            history = coord.memory.all()
+            contexts = {
+                name: build_context(prompt, history, policy, agent_name=name)
+                for name in names
+            }
+            responses = _parallel(coord, prompt, contexts=contexts, timeout=timeout)
+        else:
+            context = coord.memory.to_chat(with_speaker=True)
+            responses = _parallel(coord, prompt, context=context, timeout=timeout)
         for name, resp in responses.items():
             if not _is_error(resp):
                 _record(coord, "assistant", resp, agent=name)
@@ -190,6 +255,9 @@ def run_debate(
     if judge_agent is None:
         raise ValueError(f"debate: judge agent '{judge_name}' not registered")
     judge_input = f"{prompt}\n\n以下是各位辩手的观点:\n{_format_statements(last_responses)}\n\n" "请以裁判身份综合所有观点，给出最终结论与理由。"
+    if max_chars is not None:
+        # 裁判输入按 max_chars 截断（prompt 前缀保留）；裁判输出永不截断
+        judge_input = truncate(judge_input, max_chars)
     final = _call_agent(judge_agent, judge_input, timeout=timeout)
     if not _is_error(final):
         _record(coord, "assistant", final, agent=judge_name)
@@ -231,6 +299,7 @@ def run_supervisor(
 
     records = []
     _record(coord, "user", prompt)
+    max_chars = _max_chars(coord)
 
     # 1) plan
     plan = _call_agent(
@@ -270,9 +339,13 @@ def run_supervisor(
     records.append({"step": "work", "subtasks": subtasks, "assigned": assigned, "results": results})
 
     # 3) final report
+    summary = _format_statements(results)
+    if max_chars is not None:
+        # 工人结果汇总按 max_chars 截断；最终报告本身永不截断
+        summary = truncate(summary, max_chars)
     report = _call_agent(
         sup,
-        f"{prompt}\n\n子任务完成情况:\n{_format_statements(results)}\n\n请综合所有子任务结果，给出最终的完整回答。",
+        f"{prompt}\n\n子任务完成情况:\n{summary}\n\n请综合所有子任务结果，给出最终的完整回答。",
         timeout=timeout,
     )
     if not _is_error(report):
@@ -310,6 +383,7 @@ def run_relay(
         raise ValueError(f"relay: unknown agents in order: {missing}")
     records = []
     draft = str(prompt)
+    max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
     for r in range(1, max(1, int(rounds)) + 1):
         round_start = draft
@@ -319,6 +393,9 @@ def run_relay(
                 f"原始任务：{prompt}\n\n当前草稿：\n{draft}\n\n"
                 "要求：请改进下面这份草稿，只输出改进后的完整草稿。"
             )
+            if max_chars is not None:
+                # 传给下一棒的草稿按 max_chars 截断（prompt 前缀保留）；最终草稿永不截断
+                message = truncate(message, max_chars)
             resp = _call_agent(coord.get_agent(name), message, timeout=timeout)
             if not _is_error(resp):
                 draft = str(resp)
@@ -368,6 +445,7 @@ def run_consensus(
     if len(names) < 2:
         raise ValueError("consensus needs at least two agents")
     records = []
+    max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
 
     proposals = _parallel(coord, prompt, timeout=timeout)
@@ -377,6 +455,9 @@ def run_consensus(
     records.append({"step": "propose", "responses": proposals})
 
     ballot = _format_statements(proposals)
+    if max_chars is not None:
+        # 投票候选 ballot 按 max_chars 截断（prompt 前缀保留）；最终胜出方案永不截断
+        ballot = truncate(ballot, max_chars)
     vote_prompt = f"{prompt}\n\n候选方案:\n{ballot}\n\n请投票选出最佳方案，输出格式: vote:<agent_name>"
     votes = _parallel(coord, vote_prompt, timeout=timeout)
     records.append({"step": "vote", "votes": votes})

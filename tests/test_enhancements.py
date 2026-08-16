@@ -124,7 +124,10 @@ def test_run_meta_includes_usage():
     agent.total_usage = {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
     coord.register_agent(agent)
     result = coord.run("hi", strategy="broadcast", rounds=1)
-    assert result["meta"]["usage"]["m1"]["total_tokens"] == 10
+    # v0.5.0：meta.usage 升级为 {total, agents, cache_hits} 汇总形状
+    assert result["meta"]["usage"]["agents"]["m1"]["total_tokens"] == 10
+    assert result["meta"]["usage"]["total"]["total_tokens"] == 10
+    assert result["meta"]["usage"]["cache_hits"] == 0
 
 
 # ---------------------------------------------------------------- response_format

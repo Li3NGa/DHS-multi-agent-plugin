@@ -11,9 +11,10 @@
 
 ```python
 from deepseek_multi_agent_plugin import (
-    Agent, AgentCoordinator, AgentFactory, DeepseekAdapter,
-    MessageStore, build_coordinator, chat_completion, load_config,
-    strategies, __version__,
+    Agent, AgentCoordinator, AgentFactory, ContextPolicy,
+    DeepseekAdapter, MessageStore, ResponseCache, build_coordinator,
+    build_context, chat_completion, load_config, strategies, truncate,
+    __version__,
 )
 ```
 
@@ -34,8 +35,10 @@ Agent(
     max_tokens: int | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    retries: int = 2,                    # 429/5xx 等瞬时故障的重试次数（默认 2）
     memory: MessageStore | None = None,
     timeout: float = 60.0,                # 单次 LLM 调用超时（秒）
+    cache: bool = False,                  # 启用进程内响应缓存（自带 ResponseCache）
 )
 ```
 
@@ -47,7 +50,11 @@ Agent(
 | --- | --- |
 | `handle(message, context=None)` | 处理一条消息并返回响应。`context` 为可选的 OpenAI chat 格式消息列表，会插入到当前消息之前（策略用它传递讨论历史） |
 | `chat(messages)` | 直接以完整 chat 消息列表调用 LLM（会前置 `system_prompt`），仅 provider Agent 可用 |
-| `describe()` | 返回 `{"name", "role", "provider", "model", "has_handler"}` |
+| `describe()` | 返回 `{"name", "role", "provider", "model", "has_handler", "total_usage", "cache", "cache_hits"}` |
+
+`cache=True` 时 Agent 自带一个线程安全 LRU `ResponseCache`（默认 128 条），
+相同请求参数（base_url/model/messages/temperature/max_tokens/response_format）
+直接返回缓存内容而不打 HTTP，命中计数累计到 `cache_hits`。
 
 ### 错误约定
 
@@ -79,7 +86,7 @@ AgentFactory.from_configs(configs: list[dict]) -> list[Agent]
 | `mock` | `message_template`（默认 `{msg}`，支持 `{msg}` `{name}`） | 模板回复 |
 | `echo` | — | 返回 `{name} echo: {msg}` |
 | `http` | `url`（必填）、`timeout`（默认 5） | POST `{"message": msg}` 到端点，返回解析后的 JSON 或文本 |
-| `deepseek` / `openai` | `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`api_key`、`base_url`、`timeout` | LLM Agent |
+| `deepseek` / `openai` | `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`api_key`、`base_url`、`timeout`、`retries`（默认 2）、`cache`（默认 false） | LLM Agent |
 | `custom` | `handler`（必填，可调用对象） | 任意 Python 逻辑 |
 | `cli` | `command`（必填）、`args`（默认 `[]`）、`timeout`（默认 300）、`cwd`、`encoding`（默认 `utf-8`） | 调用外部命令行 agent，消息作为最后一个参数传入 |
 
@@ -110,7 +117,12 @@ MessageStore(capacity: int | None = None)
 ## 4. AgentCoordinator
 
 ```python
-AgentCoordinator(memory: MessageStore | None = None, timeout: float = 15.0)
+AgentCoordinator(
+    memory: MessageStore | None = None,
+    timeout: float = 15.0,
+    context_policy: ContextPolicy | None = None,
+    cache: bool = False,
+)
 ```
 
 ### 注册管理
@@ -132,7 +144,12 @@ run(prompt: str, strategy: str = "auto", **kwargs) -> dict
 - `strategy`：`auto` / `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` / `relay`；
   未知策略 → `ValueError`；没有注册任何 Agent → `RuntimeError`。
 - `**kwargs` 按策略签名过滤后转发（见 [strategies.md](strategies.md)），不认识的参数被忽略。
+- `run()` 额外支持两个由协调器自己消费的开关：`context`（`ContextPolicy` 实例或
+  `{"window", "max_chars", "hide_own"}` dict，覆盖本次运行的上下文策略）与
+  `cache`（bool，本次运行启用/停用 LLM 响应缓存）。
 - 返回统一结果结构：`{"strategy", "prompt", "rounds", "final", "meta"}`。
+- `meta.usage` 汇总形状：`{"total": {prompt_tokens, completion_tokens, total_tokens},
+  "agents": {agent名: {...}}, "cache_hits": N}`。
 
 ### 兼容旧 API
 
@@ -172,13 +189,19 @@ build_coordinator(config: dict | None = None, *, path: str | None = None) -> Age
 
 - `load_config` 支持 `.yaml` / `.yml`（需 PyYAML）/ `.json`；其他扩展名 → `ValueError`。
 - `build_coordinator` 从配置构建协调器：注册 `agents` 段的所有 Agent，并把 `coordinator.timeout_seconds`
-  作为协调器默认超时。
+  作为协调器默认超时；`coordinator.context`（dict，含 `window` / `max_chars` / `hide_own`）
+  解析为 `ContextPolicy`，`coordinator.cache`（bool）启用协调器级响应缓存。
 
 配置结构：
 
 ```yaml
 coordinator:
   timeout_seconds: 15
+  context:
+    window: 6
+    max_chars: 2000
+    hide_own: false
+  cache: false
 agents:
   - name: a1
     kind: mock
@@ -196,7 +219,7 @@ adapter.handle_harness_event(event: dict) -> dict
 
 | 事件类型 | 请求 | 返回 |
 | --- | --- | --- |
-| `run` | `{"type": "run", "prompt", "strategy", "rounds", "judge", "order", "workers", "timeout"}` | 统一结果结构；缺 `prompt` 返回 `{"error": "missing prompt"}` |
+| `run` | `{"type": "run", "prompt", "strategy", "rounds", "judge", "order", "workers", "timeout", "context", "cache"}` | 统一结果结构；缺 `prompt` 返回 `{"error": "missing prompt"}`。`context` 为 `{"window", "max_chars", "hide_own"}` dict，`cache` 为 bool，均透传给 `coordinator.run()` |
 | `agents` | `{"type": "agents"}` | `{"agents": [describe()...]}` |
 | `status` | `{"type": "status"}` | `{"status": "ok", "agents": [...], "strategy": ...}` |
 | `register` | `{"type": "register", "agents": [配置dict...]}` | `{"registered": [名字...]}` |
@@ -216,11 +239,18 @@ chat_completion(
     temperature: float | None = None,
     max_tokens: int | None = None,
     timeout: float = 60.0,
+    retries: int = 2,
+    backoff: float = 0.5,
+    response_format: dict | None = None,
+    return_usage: bool = False,
+    cache: ResponseCache | None = None,
 ) -> str
 ```
 
 对 `POST {base_url}/chat/completions` 的纯标准库封装，返回首个 `choices[0].message.content`；
 响应结构异常时返回整个响应的 JSON 字符串（便于排查）。
+`return_usage=True` 时返回 `{"content", "usage"}`；`cache` 给定时命中直接返回
+缓存内容（不发 HTTP），usage 标记为 `{"cache_hit": true}`，未命中则把成功响应写入缓存。
 
 ## 9. adapter_server 模块
 
@@ -252,3 +282,43 @@ h.clear()                           # 清空文件并重置序号
   `elapsed_seconds`），失败不记录；
 - 通过 `DeepseekAdapter(coord, history=h)`、HTTP `--history FILE` 或 MCP
   `--history FILE` 启用。
+
+---
+
+## 11. ContextPolicy（上下文压缩）
+
+```python
+ContextPolicy(
+    window: int | None = None,        # 历史窗口：保留最近 N 条历史消息
+    max_chars: int | None = None,     # 逐条截断：每条保留前 N 字符 + "…"
+    hide_own_statements: bool = False # 辩论中隐藏辩手自己的旧发言
+)
+ContextPolicy.from_dict({"window": 6, "max_chars": 2000, "hide_own": True})
+build_context(prompt, messages, policy, agent_name=None) -> list[dict]
+truncate(text, max_chars) -> str
+```
+
+- `build_context` 把原始 prompt（role=user）永远放在首位，绝不截断/绝不被窗口丢弃；
+  其余历史消息按 `window` / `max_chars` 处理；`hide_own_statements=True` 且给出
+  `agent_name` 时过滤该 agent 自己之前的 assistant 发言（按消息的 `agent` 字段识别）。
+- `truncate` 保留前 `max_chars` 个字符并追加省略号 `…`，是各策略瘦身输入共用的工具。
+- 所有字段默认关闭；不传策略时策略层行为与旧版本完全一致。
+
+---
+
+## 12. ResponseCache（LLM 响应缓存）
+
+```python
+ResponseCache(maxsize: int = 128)
+cache.get(key: str) -> str | None
+cache.put(key: str, value: str) -> None
+len(cache)
+```
+
+- 线程安全进程内 LRU（`OrderedDict` + `Lock`），超出 `maxsize` 淘汰最久未使用条目；
+- `chat_completion(..., cache=cache)` 的 key 为
+  `sha256(json.dumps((base_url, model, messages, temperature, max_tokens, response_format)))`；
+- 命中时不打 HTTP，`return_usage=True` 时 usage 标记 `{"cache_hit": true}`；
+- `Agent(cache=True)` 自带一个 `ResponseCache` 并累计 `cache_hits`；
+  `AgentFactory.create_agent(..., cache=True)` 与配置 dict 的 `cache` 字段同样生效；
+  `mock` / `echo` / `http` / `cli` / `custom` agent 不参与缓存。

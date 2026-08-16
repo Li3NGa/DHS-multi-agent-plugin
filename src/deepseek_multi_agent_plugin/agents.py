@@ -14,12 +14,14 @@ prompt plus exactly one *backend*:
 AgentFactory builds agents from kind strings or config dicts so that
 YAML/JSON configuration can describe whole agent teams.
 """
+import hashlib
 import json
 import math
 import os
 import random
 import subprocess
 import time
+from collections import OrderedDict
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 from urllib import error as urlerror
@@ -34,6 +36,44 @@ from .memory import MessageStore
 # HTTP statuses worth retrying (rate limit + transient server errors).
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 MAX_BACKOFF_SECONDS = 8.0
+
+
+class ResponseCache:
+    """线程安全的进程内 LRU 响应缓存（纯标准库实现）。
+
+    基于 ``collections.OrderedDict`` + ``Lock``；``maxsize`` 为缓存条目上限，
+    超出后淘汰最久未使用的条目。key 是调用方给定的任意可哈希值（通常由
+    :func:`chat_completion` 计算出的 sha256 摘要字符串）。
+    """
+
+    def __init__(self, maxsize: int = 128):
+        self.maxsize = max(1, int(maxsize))
+        self._data: "OrderedDict[str, str]" = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key: str) -> Optional[str]:
+        """读取缓存；命中时把条目移到末尾（LRU）。"""
+        with self._lock:
+            value = self._data.get(key)
+            if value is not None:
+                self._data.move_to_end(key)
+            return value
+
+    def put(self, key: str, value: str) -> None:
+        """写入缓存；超出 maxsize 时淘汰最久未使用的条目。"""
+        with self._lock:
+            self._data[key] = value
+            self._data.move_to_end(key)
+            if len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
 
 
 def _max_backoff_seconds() -> float:
@@ -76,6 +116,7 @@ def chat_completion(
     backoff: float = 0.5,
     response_format: Optional[Dict[str, Any]] = None,
     return_usage: bool = False,
+    cache: Optional[ResponseCache] = None,
 ) -> Any:
     """Call POST {base_url}/chat/completions and return the reply text.
 
@@ -88,7 +129,42 @@ def chat_completion(
     instead of just the content string, so callers can track token usage.
     ``response_format`` (e.g. ``{"type": "json_object"}``) is forwarded to the
     API verbatim for structured-output mode.
+
+    With ``cache`` set, successful responses are cached keyed by
+    ``(base_url, model, messages, temperature, max_tokens, response_format)``;
+    a cache hit returns immediately without any HTTP call, and with
+    ``return_usage=True`` its usage dict is marked ``{"cache_hit": True}``
+    (all token counters zero).
     """
+    cache_key = None
+    if cache is not None:
+        key_material = (
+            base_url,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            response_format,
+        )
+        digest = hashlib.sha256(
+            json.dumps(key_material, ensure_ascii=False, sort_keys=True, default=str)
+            .encode("utf-8")
+        ).hexdigest()
+        cached = cache.get(digest)
+        if cached is not None:
+            if return_usage:
+                return {
+                    "content": cached,
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cache_hit": True,
+                    },
+                }
+            return cached
+        cache_key = digest
+
     url = base_url.rstrip("/") + "/chat/completions"
     payload: Dict[str, Any] = {"model": model, "messages": messages}
     if temperature is not None:
@@ -148,6 +224,8 @@ def chat_completion(
     except (KeyError, IndexError, TypeError):
         content = json.dumps(body, ensure_ascii=False)
     if return_usage:
+        if cache is not None and cache_key is not None:
+            cache.put(cache_key, content)
         usage = body.get("usage") or {}
         return {
             "content": content,
@@ -157,6 +235,8 @@ def chat_completion(
                 "total_tokens": usage.get("total_tokens", 0) or 0,
             },
         }
+    if cache is not None and cache_key is not None:
+        cache.put(cache_key, content)
     return content
 
 
@@ -211,6 +291,7 @@ class Agent:
         retries: int = 2,
         memory: Optional[MessageStore] = None,
         timeout: float = 60.0,
+        cache: bool = False,
     ):
         self.name = name
         self.role = role
@@ -222,6 +303,9 @@ class Agent:
         self.base_url = base_url
         self.retries = int(retries)
         self.timeout = timeout
+        self.cache = bool(cache)
+        self._cache: Optional[ResponseCache] = ResponseCache() if self.cache else None
+        self.cache_hits = 0
         self.memory = memory if memory is not None else MessageStore()
         self.total_usage: Dict[str, int] = {
             "prompt_tokens": 0,
@@ -265,8 +349,13 @@ class Agent:
             retries=self.retries,
             response_format=response_format,
             return_usage=True,
+            cache=self._cache,
         )
-        self._add_usage(out["usage"])
+        if out["usage"].get("cache_hit"):
+            with self._usage_lock:
+                self.cache_hits += 1
+        else:
+            self._add_usage(out["usage"])
         return out["content"]
 
     # -- public API ---------------------------------------------------------
@@ -315,6 +404,8 @@ class Agent:
             "model": self.model,
             "has_handler": self._handler is not None,
             "total_usage": dict(self.total_usage),
+            "cache": self.cache,
+            "cache_hits": self.cache_hits,
         }
 
     def __repr__(self) -> str:
@@ -360,6 +451,7 @@ class AgentFactory:
                 base_url=kwargs.get("base_url"),
                 retries=int(kwargs.get("retries", 2)),
                 timeout=float(kwargs.get("timeout", 60.0)),
+                cache=_as_bool(kwargs.get("cache", False)),
             )
 
         if kind == "mock":
@@ -460,3 +552,10 @@ class AgentFactory:
     @staticmethod
     def from_configs(configs: List[Dict[str, Any]]) -> List[Agent]:
         return [AgentFactory.from_config(c) for c in configs]
+
+
+def _as_bool(value: Any) -> bool:
+    """宽松地把配置值解析成布尔（YAML/JSON 已是 bool；字符串兜底）。"""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)

@@ -12,7 +12,7 @@
 ## 快速开始
 
 ```powershell
-cd C:\Users\admin\deepseek-multi-agent-plugin
+cd deepseek-multi-agent-plugin
 .\deploy\install.ps1
 .\deploy\start_server.ps1 -Port 8000
 .\deploy\stop_server.ps1

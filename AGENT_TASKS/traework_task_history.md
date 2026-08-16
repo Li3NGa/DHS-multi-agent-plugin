@@ -1,7 +1,7 @@
 # TraeWork Agent 任务书：运行结果持久化 + 历史查询（Run History）
 
 > 使用方式：在 TRAE SOLO CN（TraeWork）中打开本仓库目录
-> （C:\Users\admin\deepseek-multi-agent-plugin），进入工作模式，将本文件内容
+> （本仓库的本地克隆路径），进入工作模式，将本文件内容
 > 作为任务交给 TraeWork Agent 执行。完成后通知协调者审查。
 
 ## 背景

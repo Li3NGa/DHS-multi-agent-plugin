@@ -1,6 +1,6 @@
 # Trae Agent 任务书：新增 relay（接力迭代）协作策略
 
-> 使用方式：在 Trae IDE 中打开本仓库目录（C:\Users\admin\deepseek-multi-agent-plugin），
+> 使用方式：在 Trae IDE 中打开本仓库目录（本仓库的本地克隆路径），
 > 用 Agent 模式，将本文件内容作为任务交给 Trae Agent 执行。完成后请通知协调者审查。
 
 ## 背景

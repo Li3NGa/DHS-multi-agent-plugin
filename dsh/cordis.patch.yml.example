@@ -19,4 +19,4 @@
         serverName: multiagent
         transport: stdio
         command: python
-        args: ['-m', 'deepseek_multi_agent_plugin.mcp_server', '--config', 'C:/Users/admin/deepseek-multi-agent-plugin/example_config.yaml']
+        args: ['-m', 'deepseek_multi_agent_plugin.mcp_server', '--config', 'C:/path/to/deepseek-multi-agent-plugin/example_config.yaml']

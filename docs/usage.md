@@ -123,6 +123,59 @@ agents:
 | `rounds` | 3 | 轮数（broadcast/debate 使用） |
 | `timeout_seconds` | 15 | 每个并行阶段的总超时（秒） |
 
+### 3.4 上下文压缩与效率开关
+
+上下文压缩默认全部关闭；不配置任何开关时，行为与旧版本完全一致。配置放在
+`coordinator.context` 下，或通过 CLI 的 `--context-window` / `--context-max-chars`
+临时开启：
+
+```yaml
+coordinator:
+  context:
+    window: 6          # 可选：只保留最近 6 条历史消息（原始 prompt 始终保留、不截断）
+    max_chars: 2000    # 可选：每条历史消息保留前 2000 个字符并追加省略号 "…"
+    hide_own: false    # 可选：辩论中辩手看不到自己之前的旧发言
+  cache: false         # 可选：启用进程内 LLM 响应缓存
+```
+
+`ContextPolicy` 字段：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `window` | `None` | 历史窗口，只保留最近 N 条历史消息；原始 prompt 永远保留在首位且不被窗口丢弃 |
+| `max_chars` | `None` | 逐条截断，每条历史消息保留前 N 个字符并追加省略号 `…` |
+| `hide_own_statements` | `False` | 辩论中过滤辩手自己之前的 assistant 发言（按 agent 名识别） |
+
+各策略的瘦身点（仅压缩输入，**final 结论永不截断**）：
+
+| 策略 | 瘦身点 |
+| --- | --- |
+| `broadcast` | `rounds>1` 时回喂消息按 `max_chars` 截断，prompt 前缀保留 |
+| `sequential` | 传给下一棒的 transcript 按 `max_chars` 截断，prompt 前缀保留 |
+| `debate` | 每轮按策略为每位辩手生成定制 context（窗口/截断/隐藏己方旧发言）；裁判输入截断 |
+| `supervisor` | report 步骤的工人结果汇总按 `max_chars` 截断 |
+| `consensus` | 投票候选 ballot 按 `max_chars` 截断 |
+| `relay` | 传给下一棒的草稿按 `max_chars` 截断 |
+
+CLI 开关示例：
+
+```bash
+# 保留最近 2 条历史、每条历史消息截断到 50 字符，并输出 usage 摘要
+deepseek-multi-agent run --demo --strategy debate --rounds 2 \
+  --context-window 2 --context-max-chars 50 --usage \
+  --prompt "AI 安全当前最重要的问题是什么？"
+
+# 启用进程内响应缓存（线程安全 LRU，默认 128 条）
+deepseek-multi-agent run --demo --strategy debate --rounds 2 --cache \
+  --prompt "帮我选个技术栈"
+```
+
+`--usage` 在非 JSON 模式下会于 `== FINAL ==` 之后打印 `meta.usage` 摘要
+（`total` / `agents` / `cache_hits`）；JSON 模式下 `meta.usage` 直接包含在结果中。
+LLM 响应缓存命中时不发起 HTTP 请求，`usage` 标记为 `cache_hit`，对应
+`meta.usage.cache_hits` 计数增加。`mock` / `echo` / `http` / `cli` / `custom`
+agent 不参与缓存。
+
 ---
 
 ## 4. 六种协作策略速览
@@ -328,7 +381,7 @@ agents:
 agents:
   - name: codex_worker
     kind: cli
-    command: C:/Users/admin/AppData/Local/OpenAI/Codex/bin/e305f1c75d8da435/codex.exe
+    command: codex
     args: [exec, --skip-git-repo-check]
     timeout: 600
 ```

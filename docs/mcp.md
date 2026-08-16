@@ -48,7 +48,7 @@ python -m deepseek_multi_agent_plugin.mcp_server --demo --history runs.jsonl
 ```toml
 [mcp_servers.multiagent]
 command = "python"
-args = ["-m", "deepseek_multi_agent_plugin.mcp_server", "--config", "C:/Users/admin/deepseek-multi-agent-plugin/example_config.yaml"]
+args = ["-m", "deepseek_multi_agent_plugin.mcp_server", "--config", "C:/path/to/deepseek-multi-agent-plugin/example_config.yaml"]
 ```
 
 之后 Codex 会话中可直接调用 `mcp__multiagent__run` 等工具。

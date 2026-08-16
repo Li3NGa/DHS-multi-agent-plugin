@@ -3,7 +3,7 @@
 # 用法（PowerShell，在仓库根目录执行）：
 #   .\deploy\install.ps1
 param(
-    [string]$Python = "C:/Users/admin/AppData/Local/Programs/Python/Python314/python.exe"
+    [string]$Python = "python"
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot

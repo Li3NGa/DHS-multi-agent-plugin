@@ -1,4 +1,4 @@
-# deepseek-multi-agent-plugin
+# DHS-multi-agent-plugin
 
 多智能体协同插件：定义一支 Agent 团队（DeepSeek / OpenAI 兼容 LLM、HTTP 服务、外部 CLI 命令或纯 Python 逻辑），
 再用内置的协作策略（广播、流水线、辩论、主管-下属、共识投票）让它们一起完成任务。

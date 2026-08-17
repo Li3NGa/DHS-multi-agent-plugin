@@ -9,8 +9,9 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 `supervisor`, `consensus` and `relay`.
 
 [![CI](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
 
 > 📚 详细使用文档：[使用指南](docs/usage.md) · [策略详解](docs/strategies.md) · [API 参考](docs/api_reference.md) · [HTTP 接口](docs/http_api.md) · [MCP 服务器](docs/mcp.md) · [部署指南](docs/deployment.md) · [示例代码](examples/)
 
@@ -25,7 +26,8 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 - **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作；超时不再阻塞等待慢 Agent；LLM 调用对 429/5xx 与网络抖动自动指数退避重试。
 - **Token 用量统计与结构化输出**：按 Agent 累计 `usage`（prompt/completion/total tokens，汇总进 `meta.usage`）；`Agent.chat()` 支持 `response_format`（如 JSON 模式）透传。
 - **上下文压缩 / 响应缓存 / Token 计量**：`ContextPolicy` 支持历史窗口、逐条截断、辩论中隐藏己方旧发言（默认关闭，不改变既有行为）；进程内线程安全 LRU 响应缓存（`--cache`）；`meta.usage` 汇总为 `total` / `agents` / `cache_hits`。
-- **HTTP 服务鉴权**：`--token`（或环境变量 `DS_AGENT_TOKEN`）启用 `Authorization: Bearer <token>` 校验。
+- **可观测性**：每次协作自动生成 Trace（span 记录每个 Agent 调用的耗时/状态/错误，task 记录策略步骤），`meta.run_id` 可在 HTTP `/runs/{id}` 与 MCP `runs` 工具中回查；`/status` 汇总各 Agent 的成功/超时/错误计数与健康度。
+- **HTTP 服务鉴权**：`--token`（或环境变量 `DS_AGENT_TOKEN`）启用 `Authorization: Bearer <token>` 校验；请求体大小 / Content-Type / prompt 校验与并发限流。
 - **四种使用方式**：Python API、命令行（`deepseek-multi-agent`）、HTTP 适配服务（可对接 DeepSeek Harness 等外部系统）、MCP stdio 服务（供 DSH / Codex / Claude 等 MCP 宿主调用）。
 - **零运行时依赖**（可选安装 PyYAML 以支持 YAML 配置），测试与 CI 完整。
 
@@ -60,7 +62,7 @@ together with built-in collaboration strategies: `broadcast`, `sequential`, `deb
 ```bash
 # 安装（无需任何运行时依赖）
 pip install deepseek-multi-agent-plugin
-# 或从 Git 安装固定版本：pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.8
+# 或从 Git 安装固定版本：pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v1.0.0
 
 # 用两个内置 mock Agent 跑一场辩论，无需 API Key
 deepseek-multi-agent run --demo --strategy debate --rounds 2 \

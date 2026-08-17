@@ -1,7 +1,61 @@
+# v1.0.0 Release Notes
+
+> 首个稳定版（2026-08-17）。v0.5.0 的上下文压缩 / 响应缓存基础上，
+> 补齐可观测性、E2E 测试、CI 增强与安全基线，版本号收敛为单一来源。
+> 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 本次发布亮点
+
+### 1. 可观测性（Observability）
+
+- 每次协作自动生成 **Trace**：`meta.run_id` 可用于回查 span（每个 Agent 调用
+  的耗时 / 状态 / 错误）与 task（策略步骤）。
+- **Agent 健康计数**：成功 / 超时 / 错误次数与平均耗时。
+- 新入口：HTTP `GET /status`、`GET /runs/{run_id}`；MCP 工具 `status`、`runs`。
+- `RunRegistry` 保留最近 100 次运行，内存 LRU，无外部依赖。
+
+### 2. E2E 测试与 CI 增强
+
+- `tests/test_e2e.py`：CLI / HTTP / MCP / 本地 fake LLM 全链路，覆盖鉴权、
+  Content-Type 拒绝、超大请求体拒绝与 trace 回查。
+- CI：ruff lint（E/F/W/I/B）+ Python 3.10–3.13 矩阵 + build job
+  （`twine check` + wheel 安装后冒烟测试）。
+- **197 个测试**全部通过。
+
+### 3. 安全基线（CLI / HTTP / MCP 统一）
+
+- 请求体大小上限、Content-Type 校验、prompt 类型 / 长度校验、并发限流。
+- 错误信息脱敏，不泄漏内部路径与堆栈。
+
+### 4. 工程化收尾
+
+- 版本号单一来源：`deepseek_multi_agent_plugin.__version__`，
+  `pyproject.toml` 动态引用，发布产物与运行时永远一致。
+- 新增 `deepseek-multi-agent-mcp` 入口脚本与 PyPI 元数据
+  （classifiers / 项目主页 / Issues / Changelog）。
+- 新增仓库封面横幅与 Version 徽章。
+
+## 安装
+
+```bash
+pip install deepseek-multi-agent-plugin
+# 或
+pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v1.0.0
+```
+
+## 30 秒体验
+
+```bash
+deepseek-multi-agent run --demo --strategy debate --rounds 2 --prompt "AI 安全最重要的问题是什么？"
+deepseek-multi-agent serve --demo --port 8000   # 然后: curl localhost:8000/status
+```
+
+---
+
 # v0.4.2 Release Notes
 
-> 历史说明：本文档是 v0.4.2 的发布说明；最新版本为 v0.4.6。
-> 当前项目尚未发布到 PyPI，安装命令以 README / docs/publishing.md 为准（使用 Git 安装）。
+> 历史说明：本文档是 v0.4.2 的发布说明；最新版本为 v1.0.0。
+> v0.4.8 起已发布到 PyPI，安装命令以 README / docs/publishing.md 为准。
 
 首个正式版本发布（v0.3.0 → v0.4.2）。本仓库本身就是多智能体协作的产物：
 Trae 实现功能 → 协调者审查合并 → Codex 补充能力的接力开发节奏。

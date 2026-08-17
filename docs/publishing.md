@@ -5,9 +5,11 @@
 `pip install deepseek-multi-agent-plugin`，也可以从 GitHub Release 下载
 wheel / sdist。
 
-> ✅ 当前状态：**v0.4.8 已发布到 PyPI**（2026-08-16，首次发布）。
+> ✅ 当前状态：**v1.0.0 为当前主干版本**（2026-08-17）；v0.4.8 起已发布到 PyPI。
 > 安装：`pip install deepseek-multi-agent-plugin`。
 > 后续发布流程：推送 `v*` tag 即自动构建、上传 PyPI 并附加 GitHub Release。
+> 版本号规范：只需修改 `src/deepseek_multi_agent_plugin/__init__.py` 中的
+> `__version__`（单一来源，`pyproject.toml` 动态引用）。
 
 ---
 
@@ -17,8 +19,8 @@ wheel / sdist。
 
 | 步骤 | 操作 | 触发结果 |
 | --- | --- | --- |
-| 1 | 更新版本号并提交（见第 4 节版本号规范） | 代码进入仓库 |
-| 2 | 打标签 `git tag v0.4.6` 并推送 `git push origin v0.4.6` | 触发 `publish.yml` |
+| 1 | 更新版本号并提交（改 `__init__.py` 的 `__version__`，见第 4 节版本号规范） | 代码进入仓库 |
+| 2 | 打标签 `git tag v1.0.0` 并推送 `git push origin v1.0.0` | 触发 `publish.yml` |
 | 3 | CI 构建 wheel + sdist，运行 `twine check` | job 1（build-and-publish） |
 | 4 | 发布到 PyPI | job 1 上传 `deepseek-multi-agent-plugin-X.Y.Z` |
 | 5 | 把 `dist/*.whl`、`dist/*.tar.gz` 附加到 GitHub Release | job 2（release-upload） |
@@ -104,30 +106,30 @@ twine upload dist/*
 
 ## 4. 版本号规范
 
-版本号需要在两个位置保持一致：
+版本号自 v1.0.0 起为**单一来源**，只需改一处：
 
-| 文件 | 位置 | 示例 |
+| 文件 | 位置 | 说明 |
 | --- | --- | --- |
-| `pyproject.toml` | `[project] version` | `version = "0.4.6"` |
-| `src/deepseek_multi_agent_plugin/__init__.py` | `__version__` | `__version__ = "0.4.6"` |
+| `src/deepseek_multi_agent_plugin/__init__.py` | `__version__` | 唯一需要修改的地方 |
+| `pyproject.toml` | `[tool.setuptools.dynamic]` | `version = { attr = "deepseek_multi_agent_plugin.__version__" }`，自动引用，无需改动 |
 
 tag 命名规则：
 
-- 使用 `vX.Y.Z` 格式（如 `v0.4.6`），`publish.yml` 由 `v*` 标签触发；
+- 使用 `vX.Y.Z` 格式（如 `v1.0.0`），`publish.yml` 由 `v*` 标签触发；
 - tag 应打在版本号已同步更新的提交上；
 - PyPI 不允许重复上传同一版本，发布过的版本不能覆盖修改，只能发布新版本。
 
 发布新版本的推荐顺序：
 
 ```bash
-# 1. 同步修改 pyproject.toml 与 __init__.py 中的版本号
+# 1. 修改 __init__.py 中的 __version__（单一来源）
 # 2. 提交改动
-git add pyproject.toml src/deepseek_multi_agent_plugin/__init__.py
-git commit -m "chore: bump version to 0.5.0"
+git add src/deepseek_multi_agent_plugin/__init__.py CHANGELOG.md
+git commit -m "chore: bump version to X.Y.Z"
 
 # 3. 打 tag 并推送（触发 CI 发布）
-git tag v0.5.0
-git push origin v0.5.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ---
@@ -147,8 +149,8 @@ git push origin v0.5.0
 
 说明该版本号已经上传过 PyPI。PyPI 不允许覆盖或删除后重传同名版本：
 
-- 在 `pyproject.toml` 与 `__init__.py` 中同步递增版本号（如 `0.4.3`）；
-- 重新打新 tag（如 `v0.4.3`）并推送。
+- 递增 `__init__.py` 中的 `__version__`（单一来源，如 `1.0.1`）；
+- 重新打新 tag（如 `v1.0.1`）并推送。
 
 > 本地手动发布时，先清理 `dist/` 中的旧版本产物，避免把旧文件一起上传。
 

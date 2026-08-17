@@ -16,6 +16,7 @@ from .context import ContextPolicy, build_context, truncate
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 from .memory import MessageStore
+from .observability import RunRegistry, Span, Task, Trace
 from . import strategies
 
 __all__ = [
@@ -27,6 +28,10 @@ __all__ = [
     "MessageStore",
     "ResponseCache",
     "RunHistory",
+    "RunRegistry",
+    "Span",
+    "Task",
+    "Trace",
     "build_coordinator",
     "build_context",
     "chat_completion",

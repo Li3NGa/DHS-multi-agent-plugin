@@ -21,6 +21,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
 from .context import build_context, truncate
+from .observability import Span, current_trace, note_agent_call
 
 
 def _policy(coord):
@@ -34,28 +35,46 @@ def _max_chars(coord) -> Optional[int]:
     return policy.max_chars if policy is not None else None
 
 
-def _call_agent(agent, message, context=None, timeout=None):
+def _call_agent(agent, message, context=None, timeout=None, trace=None):
     """Call one agent; exceptions are returned as {"error": ...} dicts.
 
     On timeout the executor is shut down without waiting, so a hung agent
     never blocks the strategy thread past its timeout (the worker thread
     itself keeps running until the agent's own HTTP timeout fires).
+
+    每次调用都会记录 span 与 agent 健康计数；``trace`` 由并行执行器显式
+    传入（执行器线程看不到发起线程的 contextvar），串行路径自动取当前
+    trace，没有 trace 时零开销。
     """
-    if timeout is None:
-        try:
-            return agent.handle(message, context)
-        except Exception as e:  # noqa: BLE001 - strategy-level resilience
-            return {"error": str(e)}
-    ex = ThreadPoolExecutor(max_workers=1)
+    active = trace if trace is not None else current_trace()
+    start = time.perf_counter()
+    result = None
     try:
-        fut = ex.submit(agent.handle, message, context)
-        return fut.result(timeout=timeout)
-    except (TimeoutError, FuturesTimeoutError):
-        return {"error": "timeout"}
-    except Exception as e:  # noqa: BLE001 - strategy-level resilience
-        return {"error": str(e)}
+        if timeout is None:
+            try:
+                result = agent.handle(message, context)
+            except Exception as e:  # noqa: BLE001 - strategy-level resilience
+                result = {"error": str(e)}
+        else:
+            ex = ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex.submit(agent.handle, message, context)
+                result = fut.result(timeout=timeout)
+            except (TimeoutError, FuturesTimeoutError):
+                result = {"error": "timeout"}
+            except Exception as e:  # noqa: BLE001 - strategy-level resilience
+                result = {"error": str(e)}
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
+        return result
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+        elapsed = (time.perf_counter() - start) * 1000.0
+        error = result.get("error") if isinstance(result, dict) else None
+        status = "timeout" if error == "timeout" else ("error" if error else "ok")
+        note_agent_call(agent, status, elapsed / 1000.0)
+        if active is not None:
+            active.add_span(Span(agent=getattr(agent, "name", "?"), status=status,
+                                 duration_ms=elapsed, error=error))
 
 
 def _parallel(
@@ -74,6 +93,8 @@ def _parallel(
     """
     targets = agents if agents is not None else coord.agents
     results: Dict[str, Any] = {}
+    # 执行器线程看不到发起线程的 contextvar，这里显式捕获并逐个传入。
+    trace = current_trace()
     ex = ThreadPoolExecutor(max_workers=max(1, len(targets)))
     futures = {
         ex.submit(
@@ -82,6 +103,7 @@ def _parallel(
             message,
             contexts.get(a.name, context) if contexts is not None else context,
             timeout,
+            trace,
         ): a.name
         for a in targets
     }
@@ -319,9 +341,10 @@ def run_supervisor(
     for i, sub in enumerate(subtasks):
         assigned.setdefault(worker_names[i % len(worker_names)], []).append(sub)
     results: Dict[str, Any] = {}
+    work_trace = current_trace()
     ex = ThreadPoolExecutor(max_workers=max(1, len(assigned)))
     futures = {
-        ex.submit(_call_agent, coord.get_agent(w), "\n".join(tasks), None, timeout): w
+        ex.submit(_call_agent, coord.get_agent(w), "\n".join(tasks), None, timeout, work_trace): w
         for w, tasks in assigned.items()
     }
     try:

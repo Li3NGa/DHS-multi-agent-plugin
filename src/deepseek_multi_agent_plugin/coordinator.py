@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from .agents import Agent
 from .context import ContextPolicy
 from .memory import MessageStore
+from .observability import RunRegistry, Trace, activate_trace, restore_trace
 
 
 class AgentCoordinator:
@@ -37,6 +38,7 @@ class AgentCoordinator:
         self.timeout = timeout
         self.context_policy = context_policy
         self.cache = bool(cache)
+        self.runs = RunRegistry()
 
     # -- registry ---------------------------------------------------------
     def register_agent(self, agent: Agent, replace: bool = True) -> None:
@@ -104,7 +106,26 @@ class AgentCoordinator:
             raise RuntimeError("no agents registered")
         if (strategy or "").lower() == "auto":
             strategy = self._auto_strategy()
-        return strategies.run_strategy(self, strategy, prompt, **kwargs)
+        # 可观测性：本次 run 的 trace 贯穿所有策略调用（span/task），
+        # 结束后进入 self.runs 供 HTTP / MCP 查询；无监听方时零额外成本。
+        trace = Trace(prompt=prompt, strategy=strategy)
+        token = activate_trace(trace)
+        try:
+            try:
+                result = strategies.run_strategy(self, strategy, prompt, **kwargs)
+            finally:
+                restore_trace(token)
+            trace.tasks_from_rounds(result.get("rounds") or [])
+            meta = result.setdefault("meta", {}) if isinstance(result, dict) else None
+            if meta is not None:
+                meta["run_id"] = trace.run_id
+            trace.finish()
+            self.runs.record(trace)
+            return result
+        except BaseException as exc:
+            trace.finish(error=str(exc))
+            self.runs.record(trace)
+            raise
 
     def _apply_cache(self, enabled: bool) -> None:
         """为已注册的 LLM agent 打开/关闭进程内响应缓存。"""
@@ -198,6 +219,7 @@ class DeepseekAdapter:
             "rounds": len(result.get("rounds") or []),
             "session_id": event.get("session_id"),
             "elapsed_seconds": meta.get("elapsed_seconds"),
+            "run_id": meta.get("run_id"),
         })
 
     @staticmethod
@@ -242,6 +264,7 @@ class DeepseekAdapter:
                 "status": "ok",
                 "agents": [a.name for a in coord.agents],
                 "strategy": coord._auto_strategy() if coord.agents else None,
+                "runs": len(getattr(coord, "runs", ()) or ()),
             }
         if t == "register":
             from .agents import AgentFactory

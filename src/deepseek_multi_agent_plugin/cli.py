@@ -49,21 +49,28 @@ def _build(args) -> AgentCoordinator:
     return coord
 
 
-def _print_result(result, as_json: bool, show_usage: bool = False) -> None:
+def _print_result(result, as_json: bool, show_usage: bool = False,
+                  show_trace: bool = False, coordinator: AgentCoordinator = None) -> None:
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(f"== strategy: {result['strategy']} ==")
-    for i, rec in enumerate(result["rounds"], 1):
-        print(f"--- step {i} ---")
-        print(json.dumps(rec, ensure_ascii=False, indent=2))
-    print("== FINAL ==")
-    print(result["final"])
-    if show_usage:
-        usage = (result.get("meta") or {}).get("usage")
-        if usage is not None:
-            print("== USAGE ==")
-            print(json.dumps(usage, ensure_ascii=False, indent=2))
+    else:
+        print(f"== strategy: {result['strategy']} ==")
+        for i, rec in enumerate(result["rounds"], 1):
+            print(f"--- step {i} ---")
+            print(json.dumps(rec, ensure_ascii=False, indent=2))
+        print("== FINAL ==")
+        print(result["final"])
+        if show_usage:
+            usage = (result.get("meta") or {}).get("usage")
+            if usage is not None:
+                print("== USAGE ==")
+                print(json.dumps(usage, ensure_ascii=False, indent=2))
+    if show_trace and coordinator is not None:
+        run_id = (result.get("meta") or {}).get("run_id")
+        trace = coordinator.runs.get(run_id) if run_id else None
+        if trace is not None:
+            print("== TRACE ==")
+            print(json.dumps(trace.to_dict(), ensure_ascii=False, indent=2))
 
 
 def cmd_run(args) -> int:
@@ -86,7 +93,8 @@ def cmd_run(args) -> int:
     if args.cache:
         run_kwargs["cache"] = True
     result = coord.run(args.prompt, **run_kwargs)
-    _print_result(result, args.json, show_usage=args.usage)
+    _print_result(result, args.json, show_usage=args.usage,
+                  show_trace=args.trace, coordinator=coord)
     return 0
 
 
@@ -132,8 +140,11 @@ def cmd_serve(args) -> int:
 
 
 def main(argv=None) -> int:
+    from . import __version__
     parser = argparse.ArgumentParser(prog="deepseek-multi-agent",
                                      description="Multi-agent collaboration plugin for DeepSeek")
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_run = sub.add_parser("run", help="run a multi-agent collaborative task")
@@ -153,6 +164,8 @@ def main(argv=None) -> int:
                        help="enable the in-process LLM response cache")
     p_run.add_argument("--usage", action="store_true",
                        help="print meta.usage summary after FINAL (non-JSON mode)")
+    p_run.add_argument("--trace", action="store_true",
+                       help="print the run trace (spans + tasks) after the result")
     p_run.add_argument("--config", default=None, help="YAML/JSON config file")
     p_run.add_argument("--demo", action="store_true", help="use two demo mock agents")
     p_run.add_argument("--agents", default=None, help="comma separated mock agent names")

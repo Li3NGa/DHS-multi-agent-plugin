@@ -163,7 +163,7 @@ def test_http_history_endpoint_roundtrip(tmp_path):
 def test_http_history_disabled_reports_enabled_false():
     server = _http_server()
     try:
-        assert _get(server, "/health") == {"status": "ok"}
+        assert _get(server, "/health")["status"] == "ok"
         assert _get(server, "/history") == {"records": [], "enabled": False}
     finally:
         server.shutdown()

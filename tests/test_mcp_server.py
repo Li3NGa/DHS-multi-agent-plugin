@@ -41,7 +41,7 @@ def test_initialize_falls_back_on_unknown_version():
 def test_tools_list():
     resp = _rpc(_server(), "tools/list")
     names = [t["name"] for t in resp["result"]["tools"]]
-    assert names == ["run", "agents", "register", "status", "history"]
+    assert names == ["run", "agents", "register", "status", "history", "runs"]
     run_tool = resp["result"]["tools"][0]
     assert run_tool["inputSchema"]["required"] == ["prompt"]
     assert "debate" in run_tool["inputSchema"]["properties"]["strategy"]["enum"]
@@ -114,6 +114,6 @@ def test_serve_end_to_end_over_stdio():
     lines = [json.loads(l) for l in stdout.getvalue().strip().splitlines()]
     assert len(lines) == 4  # initialize + tools/list + tools/call + parse error
     assert lines[0]["result"]["serverInfo"]["name"] == "deepseek-multi-agent-plugin"
-    assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status", "history"]
+    assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status", "history", "runs"]
     assert "final" in json.loads(lines[2]["result"]["content"][0]["text"])
     assert lines[3]["error"]["code"] == -32700

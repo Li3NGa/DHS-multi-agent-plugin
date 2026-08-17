@@ -38,7 +38,7 @@ def _post(server, path, payload):
 def test_health():
     server = _start_server()
     try:
-        assert _get(server, "/health") == {"status": "ok"}
+        assert _get(server, "/health")["status"] == "ok"
     finally:
         server.shutdown()
         server.server_close()
@@ -222,7 +222,7 @@ def test_token_auth_required():
             headers={"Authorization": "Bearer s3cret"},
         )
         with urlreq.urlopen(req, timeout=10) as resp:
-            assert json.loads(resp.read().decode()) == {"status": "ok"}
+            assert json.loads(resp.read().decode())["status"] == "ok"
 
         try:
             req = urlreq.Request(

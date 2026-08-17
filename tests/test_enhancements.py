@@ -258,7 +258,7 @@ def test_auth_accepts_valid_token():
     try:
         status, body = _request(server, "/health", token="secret")
         assert status == 200
-        assert body == {"status": "ok"}
+        assert body["status"] == "ok"
     finally:
         server.shutdown()
         server.server_close()
@@ -282,7 +282,7 @@ def test_no_auth_by_default():
     try:
         status, body = _request(server, "/health")
         assert status == 200
-        assert body == {"status": "ok"}
+        assert body["status"] == "ok"
     finally:
         server.shutdown()
         server.server_close()

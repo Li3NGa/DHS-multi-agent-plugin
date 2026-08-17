@@ -12,6 +12,7 @@ Tools exposed (server-qualified by the host, e.g. mcp__multiagent__run):
   register   -> register agents from config dicts
   status     -> adapter status summary
   history    -> recent run records (when started with --history)
+  runs       -> recent run traces / one full trace by run_id
 
 Usage:
 
@@ -107,6 +108,19 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    "runs": {
+        "description": (
+            "查询最近运行的 trace（可观测性）。不带 run_id 时返回最近运行的"
+            "摘要列表；带 run_id 时返回该次运行的完整 span/task 明细。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string", "description": "指定 run 的 id（meta.run_id），返回完整明细。"},
+                "limit": {"type": "integer", "minimum": 1, "description": "摘要列表长度（默认 20）。"},
+            },
+        },
+    },
 }
 
 
@@ -135,6 +149,7 @@ class McpServer:
             out = self.adapter.handle_harness_event(
                 {"type": "status", "session_id": args.get("session_id")}
             )
+            out["version"] = self._version()
             registry = getattr(self.adapter, "registry", None)
             if registry is not None:
                 out["sessions"] = len(registry)
@@ -143,6 +158,17 @@ class McpServer:
             return self.adapter.handle_harness_event(
                 {"type": "history", "limit": args.get("limit")}
             )
+        if name == "runs":
+            coord_registry = getattr(self.adapter.coordinator, "runs", None)
+            if coord_registry is None:
+                return {"runs": []}
+            run_id = args.get("run_id")
+            if run_id:
+                trace = coord_registry.get(str(run_id))
+                if trace is None:
+                    raise ValueError(f"run not found: {run_id}")
+                return trace.to_dict()
+            return {"runs": coord_registry.recent(int(args.get("limit") or 20))}
         raise ValueError(f"unknown tool: {name}")
 
     # -- JSON-RPC plumbing ----------------------------------------------

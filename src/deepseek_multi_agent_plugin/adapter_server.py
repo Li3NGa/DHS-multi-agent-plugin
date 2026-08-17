@@ -2,8 +2,11 @@
 
 Endpoints:
 
-  GET  /health     -> {"status": "ok"}
+  GET  /health     -> {"status": "ok", "version": ...}
   GET  /agents     -> registered agents
+  GET  /status     -> version + per-agent health counters + run count
+  GET  /runs       -> recent run traces (summaries)
+  GET  /runs/{id}  -> full trace (spans + tasks) of one run
   POST /run        -> {"type": "run", "prompt": "...", "strategy": "...", ...}
   POST /register   -> {"type": "register", "agents": [{name, kind, ...}]}
   GET  /history    -> recent run records (when started with --history)
@@ -40,6 +43,7 @@ from .agents import Agent, AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
+from .observability import agent_health
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
 MAX_REQUEST_BYTES = 1024 * 1024
@@ -126,17 +130,56 @@ class AdapterHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._send_json({"error": "unauthorized"}, code=401)
             return
-        if self.path.split("?")[0] == "/health":
-            out = {"status": "ok"}
+        path = self.path.split("?")[0]
+        if path == "/health":
+            from . import __version__
+            out = {"status": "ok", "version": __version__}
             history = getattr(self.server.adapter, "history", None)
             if history is not None:
                 out["history"] = "on"
                 out["history_count"] = len(history)
             self._send_json(out)
-        elif self.path.split("?")[0] == "/agents":
+        elif path == "/agents":
             adapter = self.server.adapter
             self._send_json({"agents": [a.describe() for a in adapter.coordinator.agents]})
-        elif self.path.split("?")[0] == "/history":
+        elif path == "/status":
+            adapter = self.server.adapter
+            coord = adapter.coordinator
+            from . import __version__
+            out = {
+                "status": "ok",
+                "version": __version__,
+                "agents": [
+                    {"name": a.name, "health": agent_health(a)}
+                    for a in coord.agents
+                ],
+                "runs": len(getattr(coord, "runs", ()) or ()),
+                "sessions": len(adapter.registry) if adapter.registry is not None else 0,
+            }
+            self._send_json(out)
+        elif path == "/runs":
+            registry = getattr(self.server.adapter.coordinator, "runs", None)
+            if registry is None:
+                self._send_json({"runs": []})
+                return
+            limit = 20
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            values = parse_qs(query).get("limit")
+            if values:
+                try:
+                    limit = min(500, max(1, int(values[0])))
+                except ValueError:
+                    pass
+            self._send_json({"runs": registry.recent(limit)})
+        elif path.startswith("/runs/"):
+            run_id = path[len("/runs/"):].strip("/")
+            registry = getattr(self.server.adapter.coordinator, "runs", None)
+            trace = registry.get(run_id) if registry is not None else None
+            if trace is None:
+                self._send_json({"error": "run not found"}, code=404)
+            else:
+                self._send_json(trace.to_dict())
+        elif path == "/history":
             history = getattr(self.server.adapter, "history", None)
             if history is None:
                 self._send_json({"records": [], "enabled": False})

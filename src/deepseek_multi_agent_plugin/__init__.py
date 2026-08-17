@@ -8,7 +8,7 @@ stdio server make the plugin easy to drive from the DeepSeek Harness or
 any other MCP-capable agent host.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 from . import strategies
 from .agents import Agent, AgentFactory, ResponseCache, chat_completion

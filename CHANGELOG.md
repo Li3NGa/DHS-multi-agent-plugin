@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-08-17
+
+### Fixed
+
+- README 版本徽章由静态文本改为 PyPI 动态徽章
+  （`shields.io/pypi/v/...`），此后发版无需再手改 README，
+  版本号真正只存在于 `__version__` 单一来源。
+
 ## [1.0.0] - 2026-08-17
 
 首个稳定版。版本号单一来源迁移至 `deepseek_multi_agent_plugin.__version__`，

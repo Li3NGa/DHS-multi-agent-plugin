@@ -111,9 +111,10 @@ def test_serve_end_to_end_over_stdio():
     ]) + "\n")
     stdout = io.StringIO()
     server.serve(stdin=stdin, stdout=stdout)
-    lines = [json.loads(l) for l in stdout.getvalue().strip().splitlines()]
+    lines = [json.loads(line) for line in stdout.getvalue().strip().splitlines()]
     assert len(lines) == 4  # initialize + tools/list + tools/call + parse error
     assert lines[0]["result"]["serverInfo"]["name"] == "deepseek-multi-agent-plugin"
-    assert [t["name"] for t in lines[1]["result"]["tools"]] == ["run", "agents", "register", "status", "history", "runs"]
+    expected_tools = ["run", "agents", "register", "status", "history", "runs"]
+    assert [t["name"] for t in lines[1]["result"]["tools"]] == expected_tools
     assert "final" in json.loads(lines[2]["result"]["content"][0]["text"])
     assert lines[3]["error"]["code"] == -32700

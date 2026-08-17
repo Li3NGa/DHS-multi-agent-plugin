@@ -157,9 +157,9 @@ def test_registry_thread_safe():
     def reader():
         try:
             for _ in range(200):
-                coord.agents
-                coord.agent_names
-                len(coord)
+                _ = coord.agents
+                _ = coord.agent_names
+                _ = len(coord)
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 

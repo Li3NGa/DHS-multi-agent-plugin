@@ -90,8 +90,10 @@ def test_supervisor_without_workers_raises():
 
 def test_consensus_majority_wins():
     coord = AgentCoordinator()
-    coord.register_agent(Agent("proposer_a", lambda msg: "ANSWER-A" if "候选方案" not in str(msg) else "vote: proposer_a"))
-    coord.register_agent(Agent("proposer_b", lambda msg: "ANSWER-B" if "候选方案" not in str(msg) else "vote: proposer_b"))
+    coord.register_agent(Agent(
+        "proposer_a", lambda msg: "ANSWER-A" if "候选方案" not in str(msg) else "vote: proposer_a"))
+    coord.register_agent(Agent(
+        "proposer_b", lambda msg: "ANSWER-B" if "候选方案" not in str(msg) else "vote: proposer_b"))
     coord.register_agent(Agent("voter", lambda msg: "vote: proposer_a"))
     result = coord.run("pick best", strategy="consensus")
     steps = {rec["step"]: rec for rec in result["rounds"]}

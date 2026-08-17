@@ -276,7 +276,10 @@ def run_debate(
     judge_agent = coord.get_agent(judge_name)
     if judge_agent is None:
         raise ValueError(f"debate: judge agent '{judge_name}' not registered")
-    judge_input = f"{prompt}\n\n以下是各位辩手的观点:\n{_format_statements(last_responses)}\n\n" "请以裁判身份综合所有观点，给出最终结论与理由。"
+    judge_input = (
+        f"{prompt}\n\n以下是各位辩手的观点:\n{_format_statements(last_responses)}\n\n"
+        "请以裁判身份综合所有观点，给出最终结论与理由。"
+    )
     if max_chars is not None:
         # 裁判输入按 max_chars 截断（prompt 前缀保留）；裁判输出永不截断
         judge_input = truncate(judge_input, max_chars)
@@ -486,8 +489,8 @@ def run_consensus(
     records.append({"step": "vote", "votes": votes})
 
     counts: Counter = Counter()
-    for name, v in votes.items():
-        w = _parse_vote(v, names)
+    for vote_text in votes.values():
+        w = _parse_vote(vote_text, names)
         if w:
             counts[w] += 1
     winner: Optional[str] = None

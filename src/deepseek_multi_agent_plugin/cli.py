@@ -116,7 +116,9 @@ def cmd_serve(args) -> int:
     if args.config:
         from .config import build_coordinator, load_config
         config = load_config(args.config)
-        session_factory = lambda: build_coordinator(config=dict(config))
+
+        def session_factory():
+            return build_coordinator(config=dict(config))
     elif args.demo:
         from .adapter_server import register_demo_agents
 

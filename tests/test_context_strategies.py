@@ -16,7 +16,6 @@ from deepseek_multi_agent_plugin import (
 )
 from deepseek_multi_agent_plugin import agents as agents_mod
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

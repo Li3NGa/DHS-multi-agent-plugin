@@ -27,7 +27,6 @@ import sys
 from typing import Any, Dict, Optional
 
 from .adapter_server import SessionRegistry, register_demo_agents
-from .agents import AgentFactory
 from .config import build_coordinator, load_dsh_credentials
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
@@ -62,11 +61,15 @@ _TOOLS: Dict[str, Dict[str, Any]] = {
             "properties": {
                 "prompt": {"type": "string", "description": "The task or question for the agents."},
                 "strategy": {"type": "string", "enum": _STRATEGIES},
-                "rounds": {"type": "integer", "minimum": 1, "description": "Debate/broadcast rounds (default 1)."},
-                "session_id": {"type": "string", "description": "Optional session id; isolates memory and registry per session."},
+                "rounds": {"type": "integer", "minimum": 1,
+                           "description": "Debate/broadcast rounds (default 1)."},
+                "session_id": {"type": "string",
+                               "description": "Optional session id; isolates memory and registry per session."},
                 "judge": {"type": "string", "description": "Debate/consensus judge agent name."},
-                "order": {"type": "array", "items": {"type": "string"}, "description": "Sequential strategy speaking order."},
-                "workers": {"type": "array", "items": {"type": "string"}, "description": "Supervisor worker agent names."},
+                "order": {"type": "array", "items": {"type": "string"},
+                          "description": "Sequential strategy speaking order."},
+                "workers": {"type": "array", "items": {"type": "string"},
+                            "description": "Supervisor worker agent names."},
                 "timeout": {"type": "number", "description": "Per-agent timeout in seconds."},
             },
             "required": ["prompt"],

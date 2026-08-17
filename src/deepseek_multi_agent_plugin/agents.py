@@ -29,7 +29,6 @@ from urllib import request
 
 from .memory import MessageStore
 
-
 # --------------------------------------------------------------------------
 # LLM chat completion over OpenAI-compatible HTTP (stdlib only)
 # --------------------------------------------------------------------------

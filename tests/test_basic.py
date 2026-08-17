@@ -1,4 +1,4 @@
-from deepseek_multi_agent_plugin import AgentCoordinator, Agent
+from deepseek_multi_agent_plugin import Agent, AgentCoordinator
 
 
 def test_import_and_run():

@@ -39,7 +39,7 @@ from threading import Lock
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs
 
-from .agents import Agent, AgentFactory
+from .agents import AgentFactory
 from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
@@ -345,7 +345,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     if args.config:
         config = load_config(args.config)
         coord = build_coordinator(config=config)
-        session_factory = lambda: build_coordinator(config=dict(config))
+
+        def session_factory():
+            return build_coordinator(config=dict(config))
     elif args.demo:
         coord = AgentCoordinator()
 

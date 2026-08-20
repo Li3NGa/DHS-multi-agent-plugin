@@ -22,10 +22,16 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
 from .context import build_context, truncate
-from .exceptions import AgentNotFound, BudgetExceeded, StrategyError
+from .exceptions import AgentNotFound, BudgetExceeded, RunTimeout, StrategyError
 from .observability import Span, current_trace, note_agent_call
 from .observability import Task as TraceTask
+from .runtime import clamp_timeout, run_deadline
 from .runtime.executor import shared_executor
+
+
+def _deadline_expired() -> bool:
+    deadline = run_deadline()
+    return deadline is not None and time.monotonic() >= deadline
 
 
 def _policy(coord):
@@ -82,16 +88,24 @@ def _call_agent(agent, message, context=None, timeout=None, trace=None):
     ``trace`` is passed explicitly by parallel executors (worker threads
     cannot see the originating thread's contextvar); the serial path
     picks up the current trace automatically.
+
+    The timeout is clamped to the remaining run budget (``run_timeout``);
+    a spent budget raises RunTimeout instead of dispatching new work.
     """
     active = trace if trace is not None else current_trace()
+    timeout = clamp_timeout(timeout)
     if timeout is None:
         return _run_agent_once(agent, message, context, trace)
     timed_out = threading.Event()
-    future = shared_executor().submit(_run_agent_once, agent, message, context, trace, timed_out)
+    # the worker thread cannot see this thread's contextvar, so the trace
+    # captured here is passed down explicitly
+    future = shared_executor().submit(_run_agent_once, agent, message, context, active, timed_out)
     try:
         return future.result(timeout=max(0.0, timeout))
     except FuturesTimeoutError:
         timed_out.set()
+        if _deadline_expired():
+            raise RunTimeout("run deadline exceeded") from None
         _note_call(agent, active, "timeout", timeout, "timeout")
         return {"error": "timeout"}
 
@@ -112,7 +126,9 @@ def _parallel(
 
     All calls share one deadline (``timeout``) measured from dispatch;
     agents that have not answered by then are marked {"error": "timeout"}.
+    The deadline is clamped to the remaining run budget (``run_timeout``).
     """
+    timeout = clamp_timeout(timeout)
     targets = agents if agents is not None else coord.agents
     trace = current_trace()
     results: Dict[str, Any] = {}
@@ -144,6 +160,9 @@ def _parallel(
                 _cancel_entries(pending)
                 raise
 
+    if _deadline_expired():
+        _cancel_entries(pending)
+        raise RunTimeout("run deadline exceeded")
     for future, agent, timed_out in pending:
         timed_out.set()
         future.cancel()
@@ -401,7 +420,8 @@ def run_supervisor(
                 agent=task.agent,
             ))
 
-    results = TaskScheduler(run_task, default_timeout=timeout).execute(task_plan, on_event=on_event)
+    scheduler = TaskScheduler(run_task, default_timeout=timeout, deadline=run_deadline())
+    results = scheduler.execute(task_plan, on_event=on_event)
     for task in task_plan:
         result = results[task.id]
         if result.status is TaskStatus.SUCCESS:

@@ -16,6 +16,7 @@ from .context import ContextPolicy
 from .legacy import LegacyCoordinatorAPI
 from .memory import MessageStore
 from .observability import RunRegistry, Trace, activate_trace, restore_trace
+from .runtime import end_run_deadline, start_run_deadline
 
 
 class AgentCoordinator(LegacyCoordinatorAPI):
@@ -85,9 +86,13 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         registered agents.
 
         Extra kwargs (rounds, judge, order, workers, timeout, ...) are
-        forwarded to the strategy function. Two run-level switches are
-        consumed by the coordinator itself:
+        forwarded to the strategy function. Run-level switches consumed by
+        the coordinator itself:
 
+        - ``timeout``: per-agent-call timeout; defaults to the coordinator's
+          own ``timeout`` (15s), so a run never waits on a hung agent forever.
+        - ``run_timeout``: budget for the whole run. Once spent, no new agent
+          call or task is dispatched and RunTimeout aborts the run.
         - ``context``: a ContextPolicy or dict with window/max_chars/hide_own
           keys; replaces the coordinator-level policy from this run on.
         - ``cache``: bool; enables/disables the in-process LLM response
@@ -98,6 +103,7 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         context = kwargs.pop("context", None)
         cache = kwargs.pop("cache", None)
         session_id = kwargs.pop("session_id", None)
+        run_timeout = kwargs.pop("run_timeout", None)
         if context is not None:
             if isinstance(context, ContextPolicy):
                 self.context_policy = context
@@ -110,12 +116,15 @@ class AgentCoordinator(LegacyCoordinatorAPI):
             raise RuntimeError("no agents registered")
         if (strategy or "").lower() == "auto":
             strategy = self._auto_strategy()
+        kwargs.setdefault("timeout", self.timeout)
         trace = Trace(prompt=prompt, strategy=strategy, session_id=session_id)
         token = activate_trace(trace)
+        deadline_token = start_run_deadline(run_timeout)
         try:
             try:
                 result = strategies.run_strategy(self, strategy, prompt, **kwargs)
             finally:
+                end_run_deadline(deadline_token)
                 restore_trace(token)
             trace.tasks_from_rounds(result.get("rounds") or [])
             meta = result.setdefault("meta", {}) if isinstance(result, dict) else None
@@ -157,6 +166,7 @@ class DeepseekAdapter:
 
     - {"type": "run", "prompt": str, "strategy": str, "rounds": int,
        "judge": str, "order": [names], "workers": [names], "timeout": float,
+       "run_timeout": float,
        "context": {...} (optional), "cache": bool (optional),
        "session_id": str (optional)}
     - {"type": "agents"}            -> registered agents
@@ -230,7 +240,7 @@ class DeepseekAdapter:
             if not prompt:
                 return {"error": "missing prompt"}
             kwargs: Dict[str, Any] = {"session_id": event.get("session_id")}
-            for key in ("rounds", "judge", "order", "workers", "timeout"):
+            for key in ("rounds", "judge", "order", "workers", "timeout", "run_timeout"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
             if event.get("context") is not None:

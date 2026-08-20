@@ -16,12 +16,16 @@ interpreted as:
 Exceptions raised by ``run_task`` mark the task FAILED, except
 BudgetExceeded which aborts the whole plan: remaining tasks are marked
 CANCELLED and the exception propagates so the run stops spending.
+
+An absolute ``deadline`` (monotonic seconds) caps the whole plan: once it
+passes, no new task is launched and RunTimeout aborts the plan (running
+tasks are cancelled); work that already finished keeps its result.
 """
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, Optional
 
-from ..exceptions import BudgetExceeded, TaskError
+from ..exceptions import BudgetExceeded, RunTimeout, TaskError
 from .executor import shared_executor
 from .task import Task, TaskPlan, TaskResult, TaskStatus
 
@@ -51,11 +55,13 @@ class TaskScheduler:
         max_concurrency: Optional[int] = None,
         default_timeout: Optional[float] = None,
         executor: Optional[ThreadPoolExecutor] = None,
+        deadline: Optional[float] = None,
     ):
         self._run_task = run_task
         self._max_concurrency = max_concurrency
         self._default_timeout = default_timeout
         self._executor = executor if executor is not None else shared_executor()
+        self._deadline = deadline
 
     # -- public API ---------------------------------------------------------
     def execute(
@@ -109,6 +115,8 @@ class TaskScheduler:
         running: Dict[Future, _Running],
         results: Dict[str, TaskResult],
     ) -> None:
+        if self._deadline is not None and time.monotonic() >= self._deadline:
+            raise RunTimeout("run deadline exceeded")
         for task_id in list(pending):
             if self._max_concurrency is not None and len(running) >= self._max_concurrency:
                 return
@@ -138,9 +146,10 @@ class TaskScheduler:
         if not done:
             self._expire(running, results, on_event)
 
-    @staticmethod
-    def _nearest_deadline(running: Dict[Future, _Running]) -> Optional[float]:
+    def _nearest_deadline(self, running: Dict[Future, _Running]) -> Optional[float]:
         deadlines = [r.deadline for r in running.values() if r.deadline is not None]
+        if self._deadline is not None:
+            deadlines.append(self._deadline)
         if not deadlines:
             return None
         remaining = min(deadlines) - time.monotonic()

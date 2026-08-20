@@ -38,5 +38,9 @@ class BudgetExceeded(DSMAError, RuntimeError):
     """Run budget (tokens / calls / time / cost) exhausted."""
 
 
+class RunTimeout(DSMAError, TimeoutError):
+    """Run-level deadline (``run_timeout``) exhausted."""
+
+
 class SessionNotFound(DSMAError, KeyError):
     """Unknown session id."""

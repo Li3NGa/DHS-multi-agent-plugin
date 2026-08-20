@@ -29,11 +29,6 @@ from .runtime import clamp_timeout, run_deadline
 from .runtime.executor import shared_executor
 
 
-def _deadline_expired() -> bool:
-    deadline = run_deadline()
-    return deadline is not None and time.monotonic() >= deadline
-
-
 def _policy(coord):
     """读取协调器上的上下文策略（未配置时为 None）。"""
     return getattr(coord, "context_policy", None)
@@ -93,9 +88,14 @@ def _call_agent(agent, message, context=None, timeout=None, trace=None):
     a spent budget raises RunTimeout instead of dispatching new work.
     """
     active = trace if trace is not None else current_trace()
+    run_dl = run_deadline()
     timeout = clamp_timeout(timeout)
     if timeout is None:
         return _run_agent_once(agent, message, context, trace)
+    # decide *before* waiting whether the run deadline or the per-call
+    # timeout ends the wait: comparing clocks after an early-returning
+    # wait() is racy on coarse-grained timers (Windows)
+    run_binds = run_dl is not None and run_dl - time.monotonic() <= timeout
     timed_out = threading.Event()
     # the worker thread cannot see this thread's contextvar, so the trace
     # captured here is passed down explicitly
@@ -104,7 +104,7 @@ def _call_agent(agent, message, context=None, timeout=None, trace=None):
         return future.result(timeout=max(0.0, timeout))
     except FuturesTimeoutError:
         timed_out.set()
-        if _deadline_expired():
+        if run_binds:
             raise RunTimeout("run deadline exceeded") from None
         _note_call(agent, active, "timeout", timeout, "timeout")
         return {"error": "timeout"}
@@ -128,6 +128,7 @@ def _parallel(
     agents that have not answered by then are marked {"error": "timeout"}.
     The deadline is clamped to the remaining run budget (``run_timeout``).
     """
+    run_dl = run_deadline()
     timeout = clamp_timeout(timeout)
     targets = agents if agents is not None else coord.agents
     trace = current_trace()
@@ -141,6 +142,11 @@ def _parallel(
         entries.append((future, agent, timed_out))
 
     deadline = time.monotonic() + timeout if timeout is not None else None
+    # when the run deadline (not the per-call timeout) ends the wait, agents
+    # still pending at that point abort the run instead of being retried
+    run_binds = run_dl is not None and (deadline is None or run_dl <= deadline)
+    if run_binds:
+        deadline = run_dl
     pending = list(entries)
     while pending:
         remaining = None if deadline is None else deadline - time.monotonic()
@@ -160,7 +166,7 @@ def _parallel(
                 _cancel_entries(pending)
                 raise
 
-    if _deadline_expired():
+    if pending and run_binds:
         _cancel_entries(pending)
         raise RunTimeout("run deadline exceeded")
     for future, agent, timed_out in pending:

@@ -13,12 +13,10 @@ Python API / HTTP 服务 / MCP stdio 服务四种方式运行多智能体协作�
 
 ## 1. 安装与准备
 
-要求：Python >= 3.10（3.10 / 3.11 / 3.12 经过 CI 验证）。
+要求：Python >= 3.10（3.10 / 3.11 / 3.12 / 3.13 经过 CI 验证）。
 
 ```bash
-# 当前尚未发布到 PyPI，从 Git 安装（固定 v0.4.6 tag）：
-pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v0.4.6
-# 配置 PYPI_API_TOKEN 并发布后（见 publishing.md），即可使用 pip install deepseek-multi-agent-plugin
+pip install deepseek-multi-agent-plugin
 ```
 
 核心功能零运行时依赖（LLM 调用走标准库 urllib）。可选依赖：
@@ -96,18 +94,22 @@ agents:
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `name` | 是 | 唯一标识，出现在所有记录与内存中 |
-| `kind` | 否 | `mock` / `echo` / `http` / `deepseek` / `openai` / `custom` / `cli`；省略时若提供 `handler` 则视为 `custom`，否则为 `mock` |
+| `kind` | 否 | `mock` / `echo` / `http` / `deepseek` / `openai` / `custom` / `cli` / `fallback`；省略时若提供 `handler` 则视为 `custom`，否则为 `mock` |
 | `role` | 否 | 角色描述（自由文本，仅作元信息） |
 | `system_prompt` | 否 | 系统提示词，每次 LLM 调用都会前置 |
 | `model` | 否 | 模型名，如 `deepseek-chat`、`deepseek-reasoner`、`gpt-4o-mini` |
 | `temperature` | 否 | 采样温度 0–2 |
 | `max_tokens` | 否 | 最大生成 token 数 |
+| `capabilities` | 否 | 逗号分隔的能力标签（如 `research,analysis`）；supervisor 按能力为任务路由 agent，见第 4 节 |
 | `api_key` | 否 | 显式 API Key；缺省读环境变量（见第 8 节） |
 | `base_url` | 否 | 覆盖默认 API 地址（可指向任何 OpenAI 兼容端点） |
+| `retries` | 否 | 429/5xx/连接错误的指数退避重试次数（默认 2，尊重 `Retry-After`） |
+| `cache` | 否 | `true` 时启用进程内 LLM 响应缓存（LRU + TTL） |
 | `timeout` | 否 | 单次 LLM 调用超时（秒，默认 60）；cli agent 的子进程超时（秒，默认 300） |
 | `message_template` | mock 用 | 模板字符串，支持 `{msg}` 与 `{name}` 占位符 |
 | `url` | http 用 | 接收 `{"message": ...}` JSON 的端点地址 |
 | `handler` | custom 用 | Python 可调用对象（仅代码中可用，YAML 无法序列化） |
+| `backends` | fallback 用 | 后备 agent 列表，按顺序尝试，首个成功者生效（仅代码中可用） |
 | `command` | cli 用 | 可执行文件路径或 PATH 中的命令名（必填） |
 | `args` | cli 用 | 传给命令的参数列表（默认 `[]`，不含消息本身） |
 | `cwd` | cli 用 | 子进程工作目录（可选） |
@@ -122,6 +124,7 @@ agents:
 | `strategy` | `auto` | 协作策略，见 [strategies.md](strategies.md) |
 | `rounds` | 3 | 轮数（broadcast/debate 使用） |
 | `timeout_seconds` | 15 | 每个并行阶段的总超时（秒） |
+| `budget` | — | 每次 run 的默认预算，见第 6.6 节 |
 
 ### 3.4 上下文压缩与效率开关
 
@@ -290,9 +293,33 @@ coord.memory.clear()               # 清空
 
 - 某个 Agent 抛异常：该 Agent 的响应记为 `{"error": "..."}`，不影响其他 Agent。
 - 并行阶段整体超时：未完成的 Agent 记为 `{"error": "timeout"}`。
+- `run_timeout`：整个 run 的运行级截止时间，到点后未开始的 agent 调用直接取消，
+  不再无限等待（配合预算的 `max_seconds` 使用效果相同）。
 - `run()` 会忽略策略不认识的额外关键字参数（如给 broadcast 传 `judge`），方便统一调用。
 
-### 6.5 运行历史（RunHistory）
+### 6.5 预算（Budget）
+
+`run()` 接受 `budget` 参数（dict 或 `BudgetManager`），每次 agent 调用前先预留额度，
+超预算立即中止剩余调用并抛 `BudgetExceeded`：
+
+```python
+result = coord.run("写一份竞品分析", strategy="supervisor",
+                   budget={"max_calls": 20, "max_tokens": 100000,
+                           "max_cost": 0.5, "max_seconds": 120})
+print(result["meta"]["budget"])   # 预算用量快照
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `max_calls` | agent 调用次数上限（含在途调用） |
+| `max_tokens` | prompt + completion token 总量上限 |
+| `max_cost` | 成本上限（按用量估算） |
+| `max_seconds` | run 时长上限，等效于 `run_timeout` |
+
+也可以在配置 `coordinator.budget` 或 `AgentCoordinator(budget=...)` 设置默认预算，
+被单次 `run(budget=...)` 覆盖。预算防止 supervisor 分解、辩论、重试组合时成本失控。
+
+### 6.6 运行历史（RunHistory）
 
 把每次协作任务的结果摘要持久化为 JSONL，服务重启后仍可查询：
 
@@ -318,19 +345,21 @@ HTTP 与 MCP 服务用 `--history FILE` 启动即可（见 [HTTP 服务接口](h
 ## 7. HTTP 服务
 
 ```bash
-python -m deepseek_multi_agent_plugin.adapter_server --port 8000 --demo
+python -m deepseek_multi_agent_plugin.adapters.http --port 8000 --demo
+# 旧路径 python -m deepseek_multi_agent_plugin.adapter_server 仍然可用
 ```
 
 ```bash
 curl -s localhost:8000/health
 curl -s localhost:8000/agents
 curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d \
-  '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
+  '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1, "session_id": "task-42"}'
 curl -s -X POST localhost:8000/register -H "Content-Type: application/json" -d \
   '{"type": "register", "agents": [{"name": "w1", "kind": "echo"}]}'
 ```
 
-协议详见 [HTTP 服务接口](http_api.md)。
+服务支持四级角色令牌鉴权（readonly / user / operator / admin）与会话管理
+（`--session-ttl` / `--max-sessions`），协议详见 [HTTP 服务接口](http_api.md)。
 
 ---
 
@@ -410,6 +439,8 @@ agent = Agent(
 
 - 辩论 N 轮 × M 个 Agent ≈ M×N 次 LLM 调用，另加 1 次裁判调用；supervisor 为 2 次主管调用 + 工人调用。
 - 每轮辩论都会携带历史上下文，轮数过多时注意 token 消耗；`MessageStore` 可设 `capacity` 截断。
+- 组合策略 + 重试容易成本失控，生产环境建议每次 run 带 `budget`（见 6.5 节）。
+- provider 失败可用 `FallbackAgent` 建后备链（primary 失败自动切 backup），见 [README](../README.md) Agents 一节。
 
 ---
 
@@ -466,7 +497,14 @@ coord.memory.clear()
 
 **Q6：HTTP 服务怎么暴露到外网？**
 
-服务本身没有鉴权与 TLS，建议放在内网或反代后（如 Nginx + 基本认证），不要直接暴露公网。
+服务自带 Bearer 令牌鉴权（`--token` 或分角色 `--role`，见
+[HTTP 服务接口](http_api.md) 第 2 节），但不含 TLS——公网部署请置于反向代理
+（Nginx/Caddy）之后，或用 mTLS 终结 TLS。
+
+**Q7：会话越来越多，内存会涨吗？**
+
+启动时设 `--session-ttl 900 --max-sessions 100`：过期会话惰性清理，
+容量满时按 LRU 淘汰；`GET /sessions` 查看统计，`POST /sessions/cleanup` 强制清理。
 
 ---
 

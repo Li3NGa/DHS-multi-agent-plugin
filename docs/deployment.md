@@ -6,8 +6,10 @@
 2. Docker 容器（推荐给 Linux 服务器 / 云主机）
 3. Linux 裸进程 + systemd（无需 Docker 的轻量方案）
 
-三种方式跑的都是同一个 `deepseek-plugin-runner` 服务，对外暴露
-`/health`、`/agents`、`/run`、`/register` 四个端点。
+三种方式跑的都是同一个 `deepseek-plugin-runner` 服务（模块路径
+`deepseek_multi_agent_plugin.adapters.http`），对外暴露 `/health`、`/agents`、
+`/status`、`/run`、`/runs`、`/history`、`/sessions`、`/register` 等端点
+（完整列表与角色要求见 [HTTP 服务接口](http_api.md)）。
 
 ---
 
@@ -164,10 +166,15 @@ sudo systemctl status deepseek-multi-agent
 
 ## 4. 安全建议
 
+- 服务自带 Bearer 令牌鉴权：单令牌（`DS_AGENT_TOKEN` / `--token`，等于 admin 角色）
+  或分角色令牌（`DS_AGENT_ROLES` 传 JSON 对象 `{role: token}`，或重复 `--role ROLE:TOKEN`）；
+- 角色层级 readonly < user < operator < admin，端点按最低角色鉴权（见
+  [HTTP 服务接口](http_api.md) 第 2 节）；
 - 服务本身不提供 TLS，公网部署务必放在反向代理（Nginx / Caddy）后面；
 - 监听地址默认 `127.0.0.1`，跨机调用时再开放 `0.0.0.0`；
-- 只要服务对外可访问，就必须配置 `DS_AGENT_TOKEN`（`Authorization: Bearer <token>`）；
+- 只要服务对外可访问，就必须配置令牌鉴权（`Authorization: Bearer <token>`）；
 - `DEEPSEEK_API_KEY` 通过环境变量或密钥管理注入，不要写进镜像 / 仓库；
+- 长期运行的服务建议设置 `--session-ttl` 与 `--max-sessions`，防止会话内存增长；
 - 生产环境建议用独立配置文件挂载，不要修改镜像内的默认配置。
 
 ---

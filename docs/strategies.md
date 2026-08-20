@@ -138,9 +138,15 @@ print(result["rounds"][-1])   # 裁判记录：{"step": "judge", "agent": ..., "
 
 ### 流程
 
-1. **plan**：主管 Agent 把任务分解为子任务（约定每行一个）；
-2. **work**：子任务按轮转分配给工人 Agent，全部并行执行；
-3. **report**：主管看到所有工人结果后，写出最终完整报告。
+1. **plan**：主管 Agent 把任务分解为结构化任务计划（JSON 优先，约定
+   `{"tasks": [{"id", "description", "agent", "depends_on"}]}`；一行一个任务的纯文本也接受）；
+2. **work**：任务交给 DAG 调度器执行——无依赖的任务并行跑，有依赖的任务等依赖完成；
+   计划中的 `agent` 指名执行者，未指名时按 agent 的 `capabilities` 匹配路由；
+3. **report**：主管看到所有任务结果后，写出最终完整报告。
+
+计划损坏（JSON 解析失败、环依赖、未知依赖、重复 id、未知 agent）会被自动
+恢复为保守的可行计划并在 `plan_info` 中记录原因，不会让整个 run 失败。
+运行级 deadline 或预算耗尽时，未开始的任务标记 `CANCELLED`，已完成的结果保留。
 
 ### 参数
 
@@ -168,23 +174,36 @@ for rec in result["rounds"]:
 
 ```json
 [
-  { "step": "plan", "agent": "supervisor", "response": "子任务1\n子任务2" },
+  { "step": "plan", "agent": "supervisor", "response": "{\"tasks\": [...]}" },
   {
     "step": "work",
-    "subtasks": ["子任务1", "子任务2"],
-    "assigned": { "w1": ["子任务1"], "w2": ["子任务2"] },
-    "results": { "w1": "结果1", "w2": "结果2" }
+    "subtasks": ["收集资料", "风险分析"],
+    "assigned": { "researcher": ["收集资料"], "critic": ["风险分析"] },
+    "results": { "researcher": "结果1", "critic": "结果2" },
+    "tasks": [
+      { "task_id": "task_1", "status": "SUCCESS", "agent": "researcher", "output": "结果1", "duration_ms": 1200.0 },
+      { "task_id": "task_2", "status": "SUCCESS", "agent": "critic", "output": "结果2", "duration_ms": 800.0 }
+    ],
+    "plan_info": { "format": "json", "notes": [] }
   },
   { "step": "report", "agent": "supervisor", "response": "最终报告" }
 ]
 ```
 
+任务状态枚举：`PENDING` / `RUNNING` / `SUCCESS` / `FAILED` / `TIMEOUT` /
+`CANCELLED` / `SKIPPED`。菱形依赖（`A → B`、`A → C`、`B,C → D`）会被正确调度。
+
+### 能力路由
+
+agent 配置了 `capabilities`（如 `research,analysis`）而计划中的任务未指名 agent 时，
+调度器按任务描述匹配能力标签选择执行者，而非简单轮转分配。
+
 ### 适用场景
 
-- 复杂任务天然可拆解（报告、方案、调研）；
+- 复杂任务天然可拆解（报告、方案、调研），子任务之间有依赖或可并行；
 - 希望主管控制分工、最终对产出负责的层级结构。
 
-> 注意：除主管外至少需要 1 个工人，否则抛 `ValueError`。
+> 注意：除主管外至少需要 1 个工人，否则抛 `StrategyError`。
 
 ---
 

@@ -1,7 +1,7 @@
 # Python API 参考（API Reference）
 
 本文档列出 `deepseek_multi_agent_plugin` 公开 API 的完整签名、参数与返回值。
-包版本：`__version__ = "0.2.0"`。
+包版本：`__version__ = "1.0.1"`。
 
 > 上一级：[详细使用说明](usage.md)
 
@@ -11,10 +11,21 @@
 
 ```python
 from deepseek_multi_agent_plugin import (
-    Agent, AgentCoordinator, AgentFactory, ContextPolicy,
-    DeepseekAdapter, MessageStore, ResponseCache, build_coordinator,
-    build_context, chat_completion, load_config, strategies, truncate,
-    __version__,
+    # agents
+    Agent, AgentFactory, FallbackAgent, ResponseCache, chat_completion,
+    # coordination
+    AgentCoordinator, DeepseekAdapter, build_coordinator, load_config,
+    # memory / context
+    MessageStore, ContextPolicy, build_context, truncate,
+    # runtime
+    BudgetManager,
+    # lifecycle & observability
+    SessionManager, RunRegistry, Span, Task, Trace,
+    # errors
+    DSMAError, AgentError, AgentNotFound, BudgetExceeded, PlanError,
+    ProviderError, SessionNotFound, StrategyError, TaskError,
+    # misc
+    request_fingerprint, strategies, __version__,
 )
 ```
 
@@ -39,10 +50,22 @@ Agent(
     memory: MessageStore | None = None,
     timeout: float = 60.0,                # 单次 LLM 调用超时（秒）
     cache: bool = False,                  # 启用进程内响应缓存（自带 ResponseCache）
+    capabilities: Iterable[str] | None = None,   # 能力标签，supervisor 按此路由
 )
 ```
 
 一个 Agent 必须有且仅有一种后端：`handler` 可调用对象，或 `provider` LLM 服务。
+
+### FallbackAgent
+
+```python
+FallbackAgent(name: str, backends: Sequence[Agent], role: str | None = None)
+```
+
+后备链 agent：按顺序调用 `backends`，首个返回成功结果的生效；后端抛异常或返回
+`{"error": ...}` 时切下一个，全部失败抛 `AgentError`。`BudgetExceeded` 不被吞掉
+（预算必须生效），获胜后端的用量并入自身 `total_usage`。`capabilities` 为全部后端
+能力的并集。
 
 ### 方法
 
@@ -50,17 +73,18 @@ Agent(
 | --- | --- |
 | `handle(message, context=None)` | 处理一条消息并返回响应。`context` 为可选的 OpenAI chat 格式消息列表，会插入到当前消息之前（策略用它传递讨论历史） |
 | `chat(messages)` | 直接以完整 chat 消息列表调用 LLM（会前置 `system_prompt`），仅 provider Agent 可用 |
-| `describe()` | 返回 `{"name", "role", "provider", "model", "has_handler", "total_usage", "cache", "cache_hits"}` |
+| `describe()` | 返回 `{"name", "role", "provider", "model", "has_handler", "capabilities", "total_usage", "cache", "cache_hits"}` |
 
-`cache=True` 时 Agent 自带一个线程安全 LRU `ResponseCache`（默认 128 条），
-相同请求参数（base_url/model/messages/temperature/max_tokens/response_format）
-直接返回缓存内容而不打 HTTP，命中计数累计到 `cache_hits`。
+`cache=True` 时 Agent 自带一个线程安全 LRU `ResponseCache`（默认 128 条、不过期），
+对影响模型结果的全部请求参数做指纹（见第 12 节），命中直接返回缓存内容而不打 HTTP，
+命中计数累计到 `cache_hits`。
 
 ### 错误约定
 
 - `provider` 未知 → `ValueError`；
 - 既无 `handler` 又无 `provider` 就调用 → `RuntimeError`；
-- LLM 调用缺少 API Key → `RuntimeError`（提示设置对应环境变量或 `api_key` 参数）。
+- LLM 调用缺少 API Key → `RuntimeError`（提示设置对应环境变量或 `api_key` 参数）；
+- 重试耗尽后抛 `ProviderError`，由策略层按 agent 隔离记录。
 
 ### 环境变量
 
@@ -86,22 +110,26 @@ AgentFactory.from_configs(configs: list[dict]) -> list[Agent]
 | `mock` | `message_template`（默认 `{msg}`，支持 `{msg}` `{name}`） | 模板回复 |
 | `echo` | — | 返回 `{name} echo: {msg}` |
 | `http` | `url`（必填）、`timeout`（默认 5） | POST `{"message": msg}` 到端点，返回解析后的 JSON 或文本 |
-| `deepseek` / `openai` | `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`api_key`、`base_url`、`timeout`、`retries`（默认 2）、`cache`（默认 false） | LLM Agent |
+| `deepseek` / `openai` | `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`api_key`、`base_url`、`timeout`、`retries`（默认 2）、`cache`（默认 false）、`capabilities` | LLM Agent |
 | `custom` | `handler`（必填，可调用对象） | 任意 Python 逻辑 |
 | `cli` | `command`（必填）、`args`（默认 `[]`）、`timeout`（默认 300）、`cwd`、`encoding`（默认 `utf-8`） | 调用外部命令行 agent，消息作为最后一个参数传入 |
+| `fallback` | `backends`（必填，Agent 列表） | 后备链 agent，按顺序尝试后端 |
 
 `from_config` 中省略 `kind` 时：提供 `handler` 视为 `custom`，否则视为 `mock`。
-未知 kind → `ValueError`。
+未知 kind → `ValueError`。配置 dict 中的 `capabilities` 接受逗号分隔字符串或列表。
 
 ---
 
 ## 3. MessageStore（共享记忆）
 
 ```python
-MessageStore(capacity: int | None = None)
+MessageStore(capacity: int | None = None, max_chars: int | None = None)
 ```
 
-线程安全的追加式消息缓冲，`capacity` 限制最大条数（超出丢弃最旧）。
+线程安全的追加式消息缓冲，两个独立上限防止长生命周期协调器内存无限增长：
+
+- `capacity`：最大消息条数（超出丢弃最旧）；
+- `max_chars`：全部消息的总字符预算（超预算时从最旧开始丢弃，最新一条始终保留）。
 
 | 方法 | 说明 |
 | --- | --- |
@@ -110,7 +138,10 @@ MessageStore(capacity: int | None = None)
 | `recent(n)` | 最近 n 条 |
 | `clear()` | 清空 |
 | `to_chat(limit=None)` | 投影为 OpenAI chat 格式 `[{role, content}]` |
+| `total_chars()` | 当前内容总字符数 |
 | `len(store)` | 消息条数 |
+
+`ContextPolicy` 控制每次请求 agent *看到* 什么；这两个上限控制 *存储* 什么。
 
 ---
 
@@ -122,6 +153,7 @@ AgentCoordinator(
     timeout: float = 15.0,
     context_policy: ContextPolicy | None = None,
     cache: bool = False,
+    budget: dict | None = None,      # 默认预算（max_calls/max_tokens/max_cost/max_seconds）
 )
 ```
 
@@ -144,12 +176,17 @@ run(prompt: str, strategy: str = "auto", **kwargs) -> dict
 - `strategy`：`auto` / `broadcast` / `sequential` / `debate` / `supervisor` / `consensus` / `relay`；
   未知策略 → `ValueError`；没有注册任何 Agent → `RuntimeError`。
 - `**kwargs` 按策略签名过滤后转发（见 [strategies.md](strategies.md)），不认识的参数被忽略。
-- `run()` 额外支持两个由协调器自己消费的开关：`context`（`ContextPolicy` 实例或
-  `{"window", "max_chars", "hide_own"}` dict，覆盖本次运行的上下文策略）与
-  `cache`（bool，本次运行启用/停用 LLM 响应缓存）。
+- `run()` 额外支持几个由协调器自己消费的开关：
+  - `context`（`ContextPolicy` 实例或 `{"window", "max_chars", "hide_own"}` dict，
+    覆盖本次运行的上下文策略）；
+  - `cache`（bool，本次运行启用/停用 LLM 响应缓存）；
+  - `budget`（dict 或 `BudgetManager`，本次运行的预算；缺省用构造器的 `budget` 默认值，
+    见第 13 节）；
+  - `run_timeout`（秒，整个 run 的运行级截止时间；到点后未开始的 agent 调用直接取消。
+    等价于 `budget={"max_seconds": ...}`）。
 - 返回统一结果结构：`{"strategy", "prompt", "rounds", "final", "meta"}`。
 - `meta.usage` 汇总形状：`{"total": {prompt_tokens, completion_tokens, total_tokens},
-  "agents": {agent名: {...}}, "cache_hits": N}`。
+  "agents": {agent名: {...}}, "cache_hits": N}`；带预算时另有 `meta.budget` 用量快照。
 
 ### 兼容旧 API
 
@@ -190,7 +227,8 @@ build_coordinator(config: dict | None = None, *, path: str | None = None) -> Age
 - `load_config` 支持 `.yaml` / `.yml`（需 PyYAML）/ `.json`；其他扩展名 → `ValueError`。
 - `build_coordinator` 从配置构建协调器：注册 `agents` 段的所有 Agent，并把 `coordinator.timeout_seconds`
   作为协调器默认超时；`coordinator.context`（dict，含 `window` / `max_chars` / `hide_own`）
-  解析为 `ContextPolicy`，`coordinator.cache`（bool）启用协调器级响应缓存。
+  解析为 `ContextPolicy`，`coordinator.cache`（bool）启用协调器级响应缓存，
+  `coordinator.budget`（dict）作为每次 run 的默认预算。
 
 配置结构：
 
@@ -202,6 +240,9 @@ coordinator:
     max_chars: 2000
     hide_own: false
   cache: false
+  budget:
+    max_calls: 20
+    max_seconds: 120
 agents:
   - name: a1
     kind: mock
@@ -252,15 +293,28 @@ chat_completion(
 `return_usage=True` 时返回 `{"content", "usage"}`；`cache` 给定时命中直接返回
 缓存内容（不发 HTTP），usage 标记为 `{"cache_hit": true}`，未命中则把成功响应写入缓存。
 
-## 9. adapter_server 模块
+## 9. 适配器（adapters 包）
+
+传输层适配器位于 `deepseek_multi_agent_plugin.adapters`，不侵入核心运行时；
+旧模块路径（`adapter_server` / `mcp_server` / 顶层 `cli`）保留为兼容别名。
 
 ```python
+# adapters.http（HTTP JSON 服务）
 serve(host: str, port: int, coordinator: AgentCoordinator) -> None
 register_demo_agents(coordinator) -> None      # 注册 alpha / beta 两个 mock Agent
 main(argv=None) -> None                        # argparse 入口：--host --port --config --demo
+                                               #   --token / --role（RBAC）
+                                               #   --session-ttl / --max-sessions
+                                               #   --history / --history-prompt-limit / --history-final-limit
+
+# adapters.mcp（stdio JSON-RPC）
+main(argv=None) -> None                        # --config / --demo / --history ...
+
+# adapters.cli（deepseek-multi-agent 命令）
+main(argv=None) -> None                        # run / agents / serve 子命令
 ```
 
-服务端点协议见 [HTTP 服务接口](http_api.md)。
+服务端点协议见 [HTTP 服务接口](http_api.md)，MCP 工具见 [MCP 服务器](mcp.md)。
 ---
 
 ## 10. RunHistory（运行历史，history 模块）
@@ -309,16 +363,127 @@ truncate(text, max_chars) -> str
 ## 12. ResponseCache（LLM 响应缓存）
 
 ```python
-ResponseCache(maxsize: int = 128)
+ResponseCache(maxsize: int = 128, ttl: float | None = None)
 cache.get(key: str) -> str | None
 cache.put(key: str, value: str) -> None
+cache.stats() -> dict     # {"size", "maxsize", "ttl", "hits", "misses", "expired", "evictions"}
+cache.clear() -> None
 len(cache)
 ```
 
 - 线程安全进程内 LRU（`OrderedDict` + `Lock`），超出 `maxsize` 淘汰最久未使用条目；
-- `chat_completion(..., cache=cache)` 的 key 为
-  `sha256(json.dumps((base_url, model, messages, temperature, max_tokens, response_format)))`；
-- 命中时不打 HTTP，`return_usage=True` 时 usage 标记 `{"cache_hit": true}`；
+  `ttl` 给定时条目读取时惰性过期；
+- 缓存 key 由 `request_fingerprint(**fields)` 生成——对 base_url / model / messages /
+  temperature / max_tokens / response_format / tools / seed 等**所有影响模型结果的参数**
+  做 sha256 指纹；transport 参数（timeout / retries / api_key）不参与指纹，
+  因此不同请求不会错误命中同一缓存；
+- 命中时不打 HTTP，`return_usage=True` 时 usage 标记为 `{"cache_hit": true}`；
 - `Agent(cache=True)` 自带一个 `ResponseCache` 并累计 `cache_hits`；
   `AgentFactory.create_agent(..., cache=True)` 与配置 dict 的 `cache` 字段同样生效；
   `mock` / `echo` / `http` / `cli` / `custom` agent 不参与缓存。
+
+---
+
+## 13. BudgetManager（运行预算）
+
+```python
+from deepseek_multi_agent_plugin import BudgetManager
+
+budget = BudgetManager(max_calls=20, max_tokens=100000, max_cost=0.5, max_seconds=120)
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `max_calls` | agent 调用次数上限（含在途调用） |
+| `max_tokens` | prompt + completion token 总量上限 |
+| `max_cost` | 成本上限（按 `pricer(usage)` 估算，可自定义计价函数） |
+| `max_seconds` | run 时长上限，等效于 `run_timeout` |
+
+- 协调器在每次 agent 调用前 `reserve()` 预留额度，调用完成后 `commit()` 实际用量，
+  超预算抛 `BudgetExceeded`（立即中止剩余调用，已完成的结果保留）；
+- `run(budget={"max_calls": ...})` 接受 dict 并自动转为 `BudgetManager`；
+- `meta["budget"]` 携带本次 run 的预算用量快照。
+
+## 14. SessionManager（会话生命周期）
+
+```python
+from deepseek_multi_agent_plugin import SessionManager
+
+manager = SessionManager(factory=None, ttl=900.0, max_sessions=100)
+```
+
+`factory` 为返回新 `AgentCoordinator` 的可调用（缺省为无参构造）。方法：
+
+| 方法 | 说明 |
+| --- | --- |
+| `get_or_create(session_id)` | 取会话协调器，不存在则创建；TTL 过期会话自动重建 |
+| `get(session_id)` | 取会话协调器，不存在 / 过期返回 `None` |
+| `delete(session_id)` | 删除会话，返回是否删除 |
+| `cleanup()` | 清理全部过期会话，返回被清退的 id 列表 |
+| `stats()` | 会话统计（数量、TTL、容量、最近活跃） |
+
+容量满时创建新会话前按 LRU 淘汰最久未活跃的会话。`sessions.SessionRegistry` 是其
+兼容别名（`adapters.http` 亦重新导出）。
+
+## 15. Runtime（任务图与调度）
+
+`deepseek_multi_agent_plugin.runtime` 包，supervisor 策略的执行层：
+
+```python
+from deepseek_multi_agent_plugin.runtime import Task, TaskPlan, TaskScheduler
+from deepseek_multi_agent_plugin.runtime.task import TaskStatus
+```
+
+- `Task(id, description, agent=None, depends_on=(), required_capabilities=(), timeout=None)`：
+  结构化子任务；
+- `TaskPlan(tasks)`：任务集合，构造时校验重复 id、未知依赖、环依赖（抛 `PlanError`）；
+- `TaskScheduler(run_task, default_timeout=None, deadline=None).execute(plan, on_event=None)`：
+  DAG 执行——无依赖的任务并行（共享有界线程池），有依赖的任务等待；
+  返回 `{task_id: TaskResult}`，`TaskResult.as_dict()` 含
+  `task_id / status / agent / error / output / duration_ms`；
+- `TaskStatus`：`PENDING` / `RUNNING` / `SUCCESS` / `FAILED` / `TIMEOUT` /
+  `CANCELLED` / `SKIPPED`。
+
+`supervisor.parse_plan(text, prompt, workers, agent_for)` 把主管 LLM 输出解析为
+`(TaskPlan, info)`，JSON 与一行一任务两种格式都接受，损坏计划自动降级修复。
+
+## 16. Observability（Trace / RunRegistry）
+
+```python
+from deepseek_multi_agent_plugin import RunRegistry, Trace, Span, Task
+```
+
+- 每次 `run()` 生成一个 `Trace`（`run_id` 唯一），内部记录 `Span`（agent 调用）
+  与 `Task`（DAG 任务）；
+- `AgentCoordinator.runs` 为有界 `RunRegistry`：容量与 TTL 上限，超限自动清理，
+  长期运行不会内存膨胀；
+- HTTP `GET /runs`、`GET /runs/{id}` 与 MCP `runs` 工具即对其的查询。
+
+## 17. 异常模型（exceptions 模块）
+
+```python
+DSMAError                  # 基类
+├── AgentError             # agent 执行失败（含 FallbackAgent 全后端失败）
+├── AgentNotFound          # 引用未注册的 agent
+├── StrategyError          # 策略前置条件不满足（如 debate 需要至少 2 个 agent）
+├── ProviderError          # LLM provider 调用失败（重试耗尽后）
+├── TaskError              # DAG 任务执行失败
+├── PlanError              # 任务计划结构损坏（环依赖、重复 id 等）
+├── BudgetExceeded         # 预算耗尽
+└── SessionNotFound        # 引用不存在的会话
+```
+
+统一继承 `DSMAError`，调用方可按需捕获粒度；未归类错误仍为原生 Python 异常。
+
+## 18. Security（RBAC）
+
+```python
+from deepseek_multi_agent_plugin.security import TokenAuthenticator, REQUIRED_ROLE
+
+auth = TokenAuthenticator(roles={"readonly": "ro-token", "user": "u-token"})
+role = auth.authenticate("Bearer ro-token")     # -> "readonly"（失败返回 None）
+auth.allows(role, "run")                        # 该角色能否执行 run 动作
+```
+
+角色层级 `readonly < user < operator < admin`；`REQUIRED_ROLE` 映射动作 → 最低角色。
+HTTP 适配器用其实现端点鉴权，MCP（宿主进程拉起、继承宿主访问控制）不使用。

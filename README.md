@@ -1,75 +1,93 @@
 # DHS-multi-agent-plugin
 
-多智能体协同插件：定义一支 Agent 团队（DeepSeek / OpenAI 兼容 LLM、HTTP 服务、外部 CLI 命令或纯 Python 逻辑），
-再用内置的协作策略（广播、流水线、辩论、主管-下属、共识投票）让它们一起完成任务。
-
-A multi-agent collaboration plugin for the DeepSeek ecosystem: define a team of agents
-(DeepSeek/OpenAI-compatible LLMs, HTTP services, external CLI commands or plain Python handlers) and run them
-together with built-in collaboration strategies: `broadcast`, `sequential`, `debate`,
-`supervisor`, `consensus` and `relay`.
-
 [![CI](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Li3NGa/deepseek-multi-agent-plugin/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/deepseek-multi-agent-plugin.svg)](https://pypi.org/project/deepseek-multi-agent-plugin/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
-> 📚 详细使用文档：[使用指南](docs/usage.md) · [策略详解](docs/strategies.md) · [API 参考](docs/api_reference.md) · [HTTP 接口](docs/http_api.md) · [MCP 服务器](docs/mcp.md) · [部署指南](docs/deployment.md) · [示例代码](examples/)
+多智能体协同运行时 / Multi-agent orchestration runtime：定义一支 Agent 团队（DeepSeek、
+OpenAI 兼容 LLM、HTTP 服务、外部 CLI 命令、纯 Python 逻辑或后备链），用结构化任务图
+（DAG）与六种协作策略编排它们，通过 Python API、CLI、HTTP 或 MCP stdio 使用。
 
----
+> 📚 详细文档：[使用指南](docs/usage.md) · [策略详解](docs/strategies.md) ·
+> [API 参考](docs/api_reference.md) · [HTTP 接口](docs/http_api.md) ·
+> [MCP 服务器](docs/mcp.md) · [部署指南](docs/deployment.md) · [示例代码](examples/)
 
-## 特性 / Features
+## Overview
 
-- **6 种开箱即用的协作策略**：广播讨论、顺序流水线（chain-of-agents）、多轮辩论（含裁判）、主管-下属（任务分解与并行执行）、提案-投票共识、接力迭代（草稿打磨）。
-- **灵活的 Agent 定义**：`mock` / `echo` / `http` / `deepseek` / `openai` / `custom` / `cli` 七种后端，LLM 调用仅依赖标准库（OpenAI 兼容 `/chat/completions` 协议）。
-- **共享对话记忆**：所有策略共享一个线程安全的 `MessageStore`，每个 Agent 都能看到讨论全程；辩论上下文带发言人标签（`[agent]: ...`），LLM 能分清谁说了什么。
-- **会话隔离**：事件可携带 `session_id`，每个会话获得独立的 Agent 注册表与对话记忆，并发任务互不污染。
-- **健壮的并行执行**：每个阶段的超时与异常都按 Agent 捕获，不会让单个 Agent 拖垮整个协作；超时不再阻塞等待慢 Agent；LLM 调用对 429/5xx 与网络抖动自动指数退避重试。
-- **Token 用量统计与结构化输出**：按 Agent 累计 `usage`（prompt/completion/total tokens，汇总进 `meta.usage`）；`Agent.chat()` 支持 `response_format`（如 JSON 模式）透传。
-- **上下文压缩 / 响应缓存 / Token 计量**：`ContextPolicy` 支持历史窗口、逐条截断、辩论中隐藏己方旧发言（默认关闭，不改变既有行为）；进程内线程安全 LRU 响应缓存（`--cache`）；`meta.usage` 汇总为 `total` / `agents` / `cache_hits`。
-- **可观测性**：每次协作自动生成 Trace（span 记录每个 Agent 调用的耗时/状态/错误，task 记录策略步骤），`meta.run_id` 可在 HTTP `/runs/{id}` 与 MCP `runs` 工具中回查；`/status` 汇总各 Agent 的成功/超时/错误计数与健康度。
-- **HTTP 服务鉴权**：`--token`（或环境变量 `DS_AGENT_TOKEN`）启用 `Authorization: Bearer <token>` 校验；请求体大小 / Content-Type / prompt 校验与并发限流。
-- **四种使用方式**：Python API、命令行（`deepseek-multi-agent`）、HTTP 适配服务（可对接 DeepSeek Harness 等外部系统）、MCP stdio 服务（供 DSH / Codex / Claude 等 MCP 宿主调用）。
-- **零运行时依赖**（可选安装 PyYAML 以支持 YAML 配置），测试与 CI 完整。
-
-## 架构 / Architecture
+本项目提供一个多智能体运行时：注册一组 Agent，提交一个 prompt，运行时负责调度、
+并发、超时、预算与记忆，返回带完整过程记录的结果。核心分层：
 
 ```
-                      +-----------------------------+
-                      |   AgentCoordinator          |
-                      |   - agent registry          |
-                      |   - shared MessageStore     |
-                      |   - strategy dispatch       |
-                      +-------------+---------------+
-                                    |
-              +---------------------+----------------------+
-              |                    |                       |
-      +-------v--------+  +--------v--------+   +---------v---------+
-      |  strategies    |  |  Agent          |   |  DeepseekAdapter  |
-      |  broadcast     |  |  - handler      |   |  HTTP /run events |
-      |  sequential    |  |  - provider     |   |  CLI / server     |
-      |  debate        |  |  - role/system  |   +---------+---------+
-      |  supervisor    |  |  - memory       |             |
-      |  consensus     |  +--------+--------+             |
-      +-------+--------+           |                      |
-              |                    |                      |
-              v                    v                      v
-        shared memory      DeepSeek/OpenAI HTTP      JSON over HTTP
-                          or any callable backend   (harness integration)
+┌────────────────────────────────────────────────────────────┐
+│ adapters/          传输层（不侵入核心）                    │
+│   cli.py · http.py（RBAC 鉴权）· mcp.py（stdio JSON-RPC）  │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+┌──────────────────────────▼─────────────────────────────────┐
+│ AgentCoordinator   Agent 注册表 + 策略分发 + run 入口       │
+├────────────────────────────────────────────────────────────┤
+│ strategies.py      broadcast / sequential / debate /       │
+│                    supervisor / consensus / relay          │
+│ supervisor.py      结构化 TaskPlan + capability 路由       │
+│ runtime/           task.py DAG 引擎 · scheduler.py 调度器  │
+│                    executor.py 共享有界线程池              │
+│                    budget.py 预算 · deadline.py 运行截止   │
+├────────────────────────────────────────────────────────────┤
+│ agents.py          mock / echo / http / cli / custom /     │
+│                    deepseek / openai / fallback（后备链）  │
+├────────────────────────────────────────────────────────────┤
+│ memory · context · cache · sessions · observability ·      │
+│ history · security · config                                │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## 快速开始 / Quickstart
+- 核心层（coordinator/strategies/runtime/agents）不依赖任何传输层；
+  HTTP、MCP、CLI 全部位于 `adapters/`，旧模块路径（`adapter_server.py` 等）
+  保留为兼容别名。
+- LLM 调用只依赖标准库（OpenAI 兼容 `/chat/completions` 协议），整个包
+  零运行时依赖（YAML 配置可选安装 PyYAML）。
+
+## Features
+
+- **6 种协作策略**：broadcast（并行讨论）、sequential（流水线）、debate（多轮辩论 + 裁判）、
+  supervisor（任务分解 + 并行执行）、consensus（提案-投票）、relay（接力打磨）。
+- **结构化任务图**：supervisor 输出 JSON TaskPlan（`tasks[].id/description/agent/depends_on`），
+  由 DAG 调度器执行——无依赖的任务并行，有依赖的任务等待，支持
+  `PENDING/RUNNING/SUCCESS/FAILED/TIMEOUT/CANCELLED/SKIPPED` 状态。
+- **Agent 能力（capabilities）**：按任务需求匹配 agent 能力路由，而非简单轮转。
+- **后备链（FallbackAgent）**：`FallbackAgent("name", [primary, backup])` 在
+  provider 失败时切换备用 agent / 备用 provider，用量照常计入预算。
+- **预算控制**：`budget={"max_calls", "max_tokens", "max_cost", "max_seconds"}`，
+  每次 agent 调用前预留额度，超预算立即中止，防止 supervisor/辩论/重试组合失控。
+- **统一并发模型**：全进程共享一个有界线程池（`DSMA_MAX_CONCURRENCY`，默认 16），
+  per-agent 超时 + 运行级 deadline（`run_timeout`），超时任务取消不再无限等待。
+- **会话生命周期**：`session_id` 隔离注册表与记忆；TTL 过期、容量上限、LRU 淘汰、
+  统计与清理端点，长期运行不会内存膨胀。
+- **响应缓存**：对 model/messages/temperature/… 全参数做指纹的 LRU 缓存，
+  支持 TTL 与命中统计，不同请求不会错误命中。
+- **可观测性**：每次 run 生成 Trace（span/task），有界 RunRegistry，
+  `GET /runs`、`GET /runs/{id}`、`GET /status` 与 MCP `runs`/`status` 工具回查。
+- **HTTP RBAC**：readonly / user / operator / admin 四级角色，端点按最低角色鉴权；
+  日志与错误栈自动脱敏。
+- **四种使用方式**：Python API、CLI（`deepseek-multi-agent`）、HTTP 适配服务、MCP stdio 服务。
+
+## Installation
 
 ```bash
-# 安装（无需任何运行时依赖）
 pip install deepseek-multi-agent-plugin
-# 或从 Git 安装固定版本：pip install git+https://github.com/Li3NGa/deepseek-multi-agent-plugin@v1.0.0
+# 可选：YAML 配置支持
+pip install "deepseek-multi-agent-plugin[dev]"   # 含 pytest / ruff / pyyaml
+```
 
-# 用两个内置 mock Agent 跑一场辩论，无需 API Key
+要求 Python 3.10+。零运行时依赖。
+
+## Quick Start
+
+```bash
+# 两个内置 mock agent 跑一场辩论，无需 API Key
 deepseek-multi-agent run --demo --strategy debate --rounds 2 \
   --prompt "AI 安全当前最重要的问题是什么？"
-
-# 完整 JSON 输出
-deepseek-multi-agent run --demo --strategy consensus --json --prompt "帮我选个技术栈"
 
 # 使用 YAML 配置的 DeepSeek 团队（需要 DEEPSEEK_API_KEY）
 deepseek-multi-agent run --config example_config.yaml --strategy supervisor \
@@ -79,35 +97,26 @@ deepseek-multi-agent run --config example_config.yaml --strategy supervisor \
 deepseek-multi-agent serve --config example_config.yaml --port 8000
 ```
 
-## 协作策略 / Collaboration strategies
+Python API：
 
-| 策略 | 说明 | 适用场景 |
-| --- | --- | --- |
-| `broadcast` | 所有 Agent 并行回答；`rounds>1` 时把上一轮回答汇总作为下一轮输入 | 头脑风暴、平行观点收集 |
-| `sequential` | 按指定顺序逐个发言，每个 Agent 看到完整历史（chain-of-agents） | 流水线加工：分析→设计→实现→评审 |
-| `debate` | 多轮辩论，最后裁判（judge）综合所有观点给出结论 | 需要对抗与收敛的决策、评审 |
-| `supervisor` | 主管分解任务为子任务，工人并行执行，主管汇总成最终报告 | 复杂任务拆解与并行执行 |
-| `consensus` | 每个 Agent 提案，全员投票，多数胜出；平票时由裁判裁决 | 需要多数共识的选择题 |
-| `relay` | 按顺序轮流打磨同一份草稿，后一位看到前一位的产出；草稿无变化时提前收敛 | 初稿→润色→审校的迭代打磨 |
+```python
+from deepseek_multi_agent_plugin import AgentCoordinator, AgentFactory
 
-> 策略名也可用 `auto`：1 个 Agent 时自动选 `broadcast`，存在名为 `supervisor` 的 Agent 时选
-> `supervisor`，否则选 `debate`。
+coord = AgentCoordinator()
+coord.register_agent(AgentFactory.create_agent('deepseek', 'researcher',
+    system_prompt='你是一名严谨的研究员'))
+coord.register_agent(AgentFactory.create_agent('deepseek', 'critic',
+    system_prompt='你是一名挑剔的批评家'))
 
-## 定义 Agent / Defining agents
+# 跑一场 2 轮辩论，并限制整个 run 最多 20 次调用、60 秒
+result = coord.run("AI 安全最重要的问题是什么？", strategy="debate", rounds=2,
+                   budget={"max_calls": 20, "max_seconds": 60})
+print(result["final"])     # 裁判的最终结论
+print(result["rounds"])    # 完整过程记录
+print(result["meta"]["usage"])  # token 用量汇总
+```
 
-| kind | 说明 | 必需参数 |
-| --- | --- | --- |
-| `mock` | 模板回复，支持 `{msg}`、`{name}` | `message_template`（可选） |
-| `echo` | 原样回显 `{name} echo: {msg}` | 无 |
-| `http` | 向 `url` POST JSON `{"message": msg}` 并解析响应 | `url` |
-| `deepseek` | DeepSeek 官方 API（OpenAI 兼容协议） | `api_key` 或环境变量 `DEEPSEEK_API_KEY` |
-| `openai` | 任意 OpenAI 兼容端点 | `api_key` 或环境变量 `OPENAI_API_KEY` |
-| `custom` | 任意 Python 可调用对象 | `handler` |
-| `cli` | 调用外部命令行程序（如 codex exec），消息作为最后一个参数 | `command` |
-
-LLM Agent 还支持 `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、`base_url` 等参数。
-
-## 配置文件 / Configuration
+## Configuration
 
 `example_config.yaml`（本项目根目录）演示了一个由 DeepSeek 支撑的三人辩论团队：
 
@@ -116,151 +125,175 @@ coordinator:
   strategy: debate
   rounds: 3
   timeout_seconds: 30
+  # budget:            # 每次 run 的默认预算（可被 run(budget=...) 覆盖）
+  #   max_calls: 20
+  #   max_tokens: 100000
 agents:
   - name: researcher
     kind: deepseek
     role: 研究员
     system_prompt: 你是一名严谨的研究员，擅长收集信息并给出有依据的分析。
-    model: deepseek-chat
     temperature: 0.3
+    capabilities: research,analysis     # supervisor 按能力路由任务
   - name: critic
     kind: deepseek
     role: 批评家
     system_prompt: 你是一名挑剔的批评家，善于发现方案中的漏洞与风险。
-    model: deepseek-chat
     temperature: 0.7
+    capabilities: critique
   - name: judge
     kind: deepseek
     role: 裁判
     system_prompt: 你是一名公正的裁判，会综合各方观点给出最终结论。
-    model: deepseek-chat
     temperature: 0.2
 ```
 
-## Python API
+也可以从代码构建：`build_coordinator(path="example_config.yaml")`。
 
-```python
-from deepseek_multi_agent_plugin import AgentCoordinator, AgentFactory
+## Agents
 
-# 组建团队
-coord = AgentCoordinator()
-coord.register_agent(AgentFactory.create_agent('deepseek', 'researcher',
-    system_prompt='你是一名严谨的研究员'))
-coord.register_agent(AgentFactory.create_agent('deepseek', 'critic',
-    system_prompt='你是一名挑剔的批评家'))
-
-# 跑一场 2 轮辩论
-result = coord.run("AI 安全最重要的问题是什么？", strategy="debate", rounds=2)
-print(result["final"])        # 裁判的最终结论
-print(result["rounds"])       # 完整过程记录
-
-# 或从配置文件构建
-from deepseek_multi_agent_plugin import build_coordinator
-coord = build_coordinator(path="example_config.yaml")
-```
-
-## HTTP 适配服务 / HTTP adapter
-
-```bash
-python -m deepseek_multi_agent_plugin.adapter_server --port 8000 --demo
-# 或：deepseek-plugin-runner --port 8000 --demo
-```
-
-```bash
-curl -s localhost:8000/health
-# {"status": "ok"}
-
-curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d \
-  '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
-
-# 会话隔离：携带 session_id 的事件路由到该会话独立的注册表与记忆
-curl -s -X POST localhost:8000/run -H "Content-Type: application/json" -d \
-  '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1, "session_id": "task-42"}'
-
-curl -s localhost:8000/agents
-curl -s -X POST localhost:8000/register -H "Content-Type: application/json" -d \
-  '{"type": "register", "agents": [{"name": "w1", "kind": "echo"}]}'
-
-# 启用鉴权（--token 或环境变量 DS_AGENT_TOKEN）后，请求需携带
-# -H "Authorization: Bearer <token>"，否则返回 401
-```
-
-| 端点 | 方法 | 说明 |
+| kind | 说明 | 必需参数 |
 | --- | --- | --- |
-| `/health` | GET | 健康检查 |
-| `/agents` | GET | 列出已注册 Agent |
-| `/run` | POST | 执行一次协作任务（`{"type":"run","prompt":"...","strategy":"...","rounds":N}`） |
-| `/register` | POST | 动态注册 Agent |
+| `mock` | 模板回复，支持 `{msg}`、`{name}` | `message_template`（可选） |
+| `echo` | 回显 `{name} echo: {msg}` | 无 |
+| `http` | 向 `url` POST JSON `{"message": msg}` 并解析响应 | `url` |
+| `deepseek` | DeepSeek 官方 API | `api_key` 或 `DEEPSEEK_API_KEY` |
+| `openai` | 任意 OpenAI 兼容端点 | `api_key` 或 `OPENAI_API_KEY` |
+| `custom` | 任意 Python 可调用对象 | `handler` |
+| `cli` | 外部命令行程序，消息作为最后一个参数 | `command` |
+| `fallback` | 后备链：按顺序尝试 `backends` 中的 agent，首个成功者生效 | `backends`（Agent 列表） |
 
-## 与 DeepSeek Harness 集成 / Integration with the DeepSeek Harness
+LLM agent 还支持 `role`、`system_prompt`、`model`、`temperature`、`max_tokens`、
+`base_url`、`retries`、`capabilities`。LLM 调用对 429/5xx/连接错误做指数退避重试
+（尊重 `Retry-After`），重试耗尽后抛出异常、由策略层按 agent 隔离记录。
 
-`DeepseekAdapter.handle_harness_event(event)` 把外部事件翻译成协调器调用：
+`FallbackAgent` 示例（provider 宕机时切换到备用 provider）：
 
 ```python
-from deepseek_multi_agent_plugin import AgentCoordinator, DeepseekAdapter, build_coordinator
+from deepseek_multi_agent_plugin import Agent, AgentFactory, FallbackAgent
 
-coord = build_coordinator(path="example_config.yaml")
-adapter = DeepseekAdapter(coord)
-result = adapter.handle_harness_event({
-    "type": "run",
-    "prompt": "设计一个插件架构",
-    "strategy": "supervisor",
-    "rounds": 3,
-})
+primary = AgentFactory.create_agent('deepseek', 'ds-primary', api_key='...')
+backup = AgentFactory.create_agent('openai', 'oa-backup', api_key='...')
+coord.register_agent(FallbackAgent('writer', [primary, backup]))
 ```
 
-支持的事件类型：`run`、`agents`、`status`、`register`。HTTP 适配服务即基于此接口实现，
-因此任何能发起 HTTP 请求的系统（包括 DeepSeek Harness 的工作流）都可以直接调用本插件。
+## Strategies
 
-## 文档 / Documentation
+| 策略 | 说明 | 适用场景 |
+| --- | --- | --- |
+| `broadcast` | 所有 agent 并行回答；`rounds>1` 时把上一轮回答汇总作为下一轮输入 | 头脑风暴、观点收集 |
+| `sequential` | 按指定顺序逐个发言，每个 agent 看到完整历史 | 流水线：分析→设计→实现→评审 |
+| `debate` | 多轮辩论，最后裁判综合所有观点 | 需要对抗与收敛的决策 |
+| `supervisor` | 分解任务为结构化子任务，DAG 调度并行执行，汇总成报告 | 复杂任务拆解与并行 |
+| `consensus` | 每个 agent 提案，全员投票，平票由裁判裁决 | 需要多数共识的选择题 |
+| `relay` | 轮流打磨同一份草稿，无变化时提前收敛 | 初稿→润色→审校 |
 
-详细使用说明都在 [docs/](docs/) 目录，从 [使用指南](docs/usage.md) 开始：
+策略名也可用 `auto`：1 个 agent 时选 `broadcast`，存在名为 `supervisor` 的 agent 时
+选 `supervisor`，否则选 `debate`。
 
-| 文档 | 内容 |
-| --- | --- |
-| [详细使用说明](docs/usage.md) | 安装、配置、CLI / Python API / HTTP 三种用法、接入真实 LLM、FAQ |
-| [协作策略详解](docs/strategies.md) | 6 种策略的流程、参数、返回结构、选型建议 |
-| [Python API 参考](docs/api_reference.md) | 全部类与函数的签名、参数、返回值 |
-| [HTTP 服务接口](docs/http_api.md) | 四个端点的请求/响应协议、curl 示例、安全建议 |
-| [部署指南](docs/deployment.md) | Windows / Docker / systemd 三种部署方式、健康检查、优雅关闭与安全建议 |
-| [MCP 服务器](docs/mcp.md) | 把协作引擎暴露给 DSH / Codex / Claude 等 MCP 宿主，4 个工具 + 对接示例 |
-| [发布指南](docs/publishing.md) | PyPI / GitHub Release 双通道发布流程、PYPI_API_TOKEN 配置、版本号规范与常见问题 |
+## Task Engine
 
-### Docker 部署 / Docker deployment
+supervisor 策略不再依赖文本拆分：LLM 被要求输出结构化 JSON 计划，
+
+```json
+{"tasks": [
+  {"id": "task_1", "description": "收集资料", "agent": "researcher", "depends_on": []},
+  {"id": "task_2", "description": "风险分析", "agent": "critic",    "depends_on": ["task_1"]}
+]}
+```
+
+`runtime/task.py` + `runtime/scheduler.py` 按 DAG 执行：`A → B`、`A → C`、
+`B,C → D` 菱形依赖会被正确调度，无依赖的任务并行执行。计划损坏
+（环依赖、未知依赖、重复 id、非 JSON 输出）会被自动恢复为保守的可行计划并记录 note。
+运行级 deadline 或预算耗尽时，未开始的 task 标记 `CANCELLED`，已完成的保留结果。
+
+## Sessions
+
+事件可携带 `session_id`：每个会话获得独立的 agent 注册表与对话记忆，并发任务互不污染。
+`SessionManager` 提供 TTL 过期、`max_sessions` 容量上限（LRU 淘汰）与统计：
 
 ```bash
-docker compose up -d --build
+python -m deepseek_multi_agent_plugin.adapters.http --port 8000 --demo \
+  --session-ttl 900 --max-sessions 100
+
+curl -s localhost:8000/sessions                 # 统计（顺带清理过期会话）
+curl -s -X POST localhost:8000/sessions/cleanup # 强制清理，返回被清退的 id
+curl -s -X DELETE localhost:8000/sessions/task-42
 ```
 
-镜像通过 `HOST`、`PORT`、`CONFIG`、`DEEPSEEK_API_KEY`、`DS_AGENT_TOKEN`
-环境变量配置，健康检查与完整部署说明见 [docs/deployment.md](docs/deployment.md)。
-
-### MCP 集成 / MCP integration
+## HTTP
 
 ```bash
-python -m deepseek_multi_agent_plugin.mcp_server --config example_config.yaml
+python -m deepseek_multi_agent_plugin.adapters.http --port 8000 --demo
+# 旧路径 python -m deepseek_multi_agent_plugin.adapter_server 仍然可用
 ```
 
-通过 stdio JSON-RPC 把 `run` / `agents` / `register` / `status` 四个工具暴露给
-DSH、Codex、Claude Code 等 MCP 宿主，让其他 agent 直接驱动本插件的多智能体协作，
-详见 [docs/mcp.md](docs/mcp.md)。
+| 端点 | 方法 | 最低角色 | 说明 |
+| --- | --- | --- | --- |
+| `/health` | GET | readonly | 健康检查 |
+| `/agents` | GET | readonly | 列出已注册 agent |
+| `/status` | GET | readonly | 版本 + agent 健康计数 + 运行数 |
+| `/run` | POST | user | 执行协作任务 |
+| `/runs` | GET | operator | 最近运行 Trace 摘要 |
+| `/runs/{id}` | GET | operator | 单次运行完整 Trace |
+| `/history` | GET | operator | 运行历史（`--history` 启用） |
+| `/sessions` | GET | operator | 会话统计 |
+| `/sessions/cleanup` | POST | operator | 强制清理过期会话 |
+| `/sessions/{id}` | DELETE | operator | 删除会话 |
+| `/register` | POST | admin | 动态注册 agent |
 
-可直接运行的示例代码在 [examples/](examples/)：
-
-| 示例 | 说明 |
-| --- | --- |
-| [demo_strategies.py](examples/demo_strategies.py) | mock 团队演示全部 6 种策略，无需 API Key |
-| [demo_deepseek_team.py](examples/demo_deepseek_team.py) | DeepSeek 真实 LLM 三人辩论 |
-| [run_http_server.py](examples/run_http_server.py) | 一键启动 HTTP 适配服务 |
-
-## 开发与测试 / Development
+鉴权（不配置即本地开放模式）：
 
 ```bash
-pip install -e .[dev]
-pytest -q
+# 单令牌 = admin（与旧版 --token 行为一致）
+python -m ... --token s3cret          # 或环境变量 DS_AGENT_TOKEN
+
+# 分角色令牌（可重复，或 $DS_AGENT_ROLES 传 JSON 对象）
+python -m ... --role readonly:ro-token --role user:u-token \
+             --role operator:op-token --role admin:ad-token
 ```
 
-GitHub Actions CI 会在 Python 3.10 / 3.11 / 3.12 上运行全部测试。
+角色层级：readonly < user < operator < admin。请求需带
+`Authorization: Bearer <token>`；权限不足返回 403 并指明所需角色。
+服务端日志与异常栈在落盘前做凭据脱敏。
+
+## MCP
+
+```bash
+python -m deepseek_multi_agent_plugin.adapters.mcp --config example_config.yaml
+# 旧路径 python -m deepseek_multi_agent_plugin.mcp_server 仍然可用
+```
+
+通过 stdio JSON-RPC 暴露 `run` / `agents` / `register` / `status` / `history` / `runs`
+工具给 DSH、Codex、Claude Code 等 MCP 宿主。MCP 服务由宿主进程拉起、继承宿主自身的
+访问控制，因此不做 HTTP 那套令牌鉴权。详见 [docs/mcp.md](docs/mcp.md)。
+
+## Development
+
+```bash
+git clone https://github.com/Li3NGa/deepseek-multi-agent-plugin
+cd deepseek-multi-agent-plugin
+pip install -e ".[dev]"
+```
+
+常用命令：
+
+```bash
+pytest -q          # 全部测试
+ruff check src tests
+```
+
+## Testing
+
+- 329 个测试：单元（agents / strategies / task engine / sessions / memory /
+  cache / budget / security）、集成（HTTP / MCP / CLI / e2e）、并发与失败注入
+  （429、5xx、连接重置、畸形响应、重试耗尽、100 会话 × 10 agent 压力）。
+- GitHub Actions 在 Python 3.10–3.13 矩阵上运行测试 + ruff + 构建 + 冒烟。
+
+## Contributing
+
+欢迎 issue 与 PR：改动请附带测试；提交信息用简短祈使句（如 `add session ttl eviction`）；
+发布流程见 [docs/publishing.md](docs/publishing.md)。
 
 ## License
 

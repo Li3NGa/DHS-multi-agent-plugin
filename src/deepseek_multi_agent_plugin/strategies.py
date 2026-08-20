@@ -14,15 +14,18 @@ Strategies share a coordinator-level MessageStore as the discussion memory,
 so every agent sees the ongoing transcript (via ``context`` for LLM agents).
 """
 import inspect
+import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, wait
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
 from .context import build_context, truncate
-from .exceptions import AgentNotFound, StrategyError
+from .exceptions import AgentNotFound, BudgetExceeded, StrategyError
 from .observability import Span, current_trace, note_agent_call
+from .observability import Task as TraceTask
+from .runtime.executor import shared_executor
 
 
 def _policy(coord):
@@ -36,46 +39,61 @@ def _max_chars(coord) -> Optional[int]:
     return policy.max_chars if policy is not None else None
 
 
-def _call_agent(agent, message, context=None, timeout=None, trace=None):
-    """Call one agent; exceptions are returned as {"error": ...} dicts.
+def _note_call(agent, trace, status: str, seconds: float, error: Optional[str] = None) -> None:
+    note_agent_call(agent, status, seconds)
+    if trace is not None:
+        trace.add_span(Span(agent=getattr(agent, "name", "?"), status=status,
+                            duration_ms=seconds * 1000.0, error=error))
 
-    On timeout the executor is shut down without waiting, so a hung agent
-    never blocks the strategy thread past its timeout (the worker thread
-    itself keeps running until the agent's own HTTP timeout fires).
 
-    每次调用都会记录 span 与 agent 健康计数；``trace`` 由并行执行器显式
-    传入（执行器线程看不到发起线程的 contextvar），串行路径自动取当前
-    trace，没有 trace 时零开销。
+def _run_agent_once(agent, message, context=None, trace=None, timed_out=None):
+    """Inline agent call with health/span recording.
+
+    ``timed_out`` lets a caller that stopped waiting tell the still-running
+    worker to skip recording (the timeout is noted by the caller instead).
+    BudgetExceeded is never converted to an error dict: it must abort the
+    whole run, not be retried by the next strategy step.
     """
     active = trace if trace is not None else current_trace()
     start = time.perf_counter()
-    result = None
+    status = "ok"
+    error = None
     try:
-        if timeout is None:
-            try:
-                result = agent.handle(message, context)
-            except Exception as e:  # noqa: BLE001 - strategy-level resilience
-                result = {"error": str(e)}
-        else:
-            ex = ThreadPoolExecutor(max_workers=1)
-            try:
-                fut = ex.submit(agent.handle, message, context)
-                result = fut.result(timeout=timeout)
-            except (TimeoutError, FuturesTimeoutError):
-                result = {"error": "timeout"}
-            except Exception as e:  # noqa: BLE001 - strategy-level resilience
-                result = {"error": str(e)}
-            finally:
-                ex.shutdown(wait=False, cancel_futures=True)
-        return result
+        return agent.handle(message, context)
+    except BudgetExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001 - strategy-level resilience
+        status = "error"
+        error = str(exc)
+        return {"error": error}
     finally:
-        elapsed = (time.perf_counter() - start) * 1000.0
-        error = result.get("error") if isinstance(result, dict) else None
-        status = "timeout" if error == "timeout" else ("error" if error else "ok")
-        note_agent_call(agent, status, elapsed / 1000.0)
-        if active is not None:
-            active.add_span(Span(agent=getattr(agent, "name", "?"), status=status,
-                                 duration_ms=elapsed, error=error))
+        if timed_out is None or not timed_out.is_set():
+            _note_call(agent, active, status, time.perf_counter() - start, error)
+
+
+def _call_agent(agent, message, context=None, timeout=None, trace=None):
+    """Call one agent; exceptions are returned as {"error": ...} dicts.
+
+    With a timeout, the call is dispatched to the shared bounded executor
+    and the caller stops waiting when the deadline passes; the worker
+    thread keeps running until the agent's own I/O timeout fires (Python
+    threads cannot be killed), but no longer occupies the caller.
+
+    ``trace`` is passed explicitly by parallel executors (worker threads
+    cannot see the originating thread's contextvar); the serial path
+    picks up the current trace automatically.
+    """
+    active = trace if trace is not None else current_trace()
+    if timeout is None:
+        return _run_agent_once(agent, message, context, trace)
+    timed_out = threading.Event()
+    future = shared_executor().submit(_run_agent_once, agent, message, context, trace, timed_out)
+    try:
+        return future.result(timeout=max(0.0, timeout))
+    except FuturesTimeoutError:
+        timed_out.set()
+        _note_call(agent, active, "timeout", timeout, "timeout")
+        return {"error": "timeout"}
 
 
 def _parallel(
@@ -91,33 +109,53 @@ def _parallel(
     ``context`` is shared by every agent; ``contexts`` is an optional
     ``{agent_name: chat_messages}`` mapping that overrides the shared context
     per agent (used by debate to give each debater a customized view).
+
+    All calls share one deadline (``timeout``) measured from dispatch;
+    agents that have not answered by then are marked {"error": "timeout"}.
     """
     targets = agents if agents is not None else coord.agents
-    results: Dict[str, Any] = {}
-    # 执行器线程看不到发起线程的 contextvar，这里显式捕获并逐个传入。
     trace = current_trace()
-    ex = ThreadPoolExecutor(max_workers=max(1, len(targets)))
-    futures = {
-        ex.submit(
-            _call_agent,
-            a,
-            message,
-            contexts.get(a.name, context) if contexts is not None else context,
-            timeout,
-            trace,
-        ): a.name
-        for a in targets
-    }
-    try:
-        for f in as_completed(futures, timeout=timeout):
-            results[futures[f]] = f.result()
-    except (TimeoutError, FuturesTimeoutError):
-        pass  # remaining agents are marked below
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
-    for a in targets:
-        results.setdefault(a.name, {"error": "timeout"})
+    results: Dict[str, Any] = {}
+    pool = shared_executor()
+    entries = []
+    for agent in targets:
+        ctx = contexts.get(agent.name, context) if contexts is not None else context
+        timed_out = threading.Event()
+        future = pool.submit(_run_agent_once, agent, message, ctx, trace, timed_out)
+        entries.append((future, agent, timed_out))
+
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    pending = list(entries)
+    while pending:
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            break
+        done, _ = wait([e[0] for e in pending], timeout=remaining, return_when=FIRST_COMPLETED)
+        if not done:
+            break
+        for entry in list(pending):
+            future, agent, _ = entry
+            if future not in done:
+                continue
+            pending.remove(entry)
+            try:
+                results[agent.name] = future.result()
+            except BudgetExceeded:
+                _cancel_entries(pending)
+                raise
+
+    for future, agent, timed_out in pending:
+        timed_out.set()
+        future.cancel()
+        results.setdefault(agent.name, {"error": "timeout"})
+        _note_call(agent, trace, "timeout", timeout or 0.0, "timeout")
     return results
+
+
+def _cancel_entries(entries) -> None:
+    for future, _, timed_out in entries:
+        timed_out.set()
+        future.cancel()
 
 
 def _is_error(value: Any) -> bool:
@@ -298,7 +336,7 @@ def run_debate(
 
 
 # --------------------------------------------------------------------------
-# supervisor: decompose -> delegate -> synthesize
+# supervisor: plan -> DAG execution -> synthesis
 # --------------------------------------------------------------------------
 def run_supervisor(
     coord,
@@ -307,9 +345,14 @@ def run_supervisor(
     workers: Optional[Sequence[str]] = None,
     timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """The supervisor decomposes the task into one-subtask-per-line, workers
-    (round-robin) solve the subtasks in parallel, and the supervisor writes
-    the final report from the worker results."""
+    """The supervisor produces a structured task plan (JSON preferred,
+    one-task-per-line accepted); tasks run on the DAG scheduler —
+    independent tasks in parallel, dependent tasks after their inputs —
+    and the supervisor writes the final report from the task results."""
+    from . import supervisor as supervisor_mod
+    from .runtime import TaskScheduler
+    from .runtime.task import TaskStatus
+
     start = time.time()
     names = [a.name for a in coord.agents]
     sup_name = supervisor or ("supervisor" if "supervisor" in names else names[0])
@@ -326,47 +369,69 @@ def run_supervisor(
     records = []
     _record(coord, "user", prompt)
     max_chars = _max_chars(coord)
+    trace = current_trace()
 
-    # 1) plan
-    plan = _call_agent(
-        sup,
-        f"{prompt}\n\n请把上面的任务分解为多个子任务，每行一个子任务，只输出子任务列表。",
-        timeout=timeout,
+    # 1) plan: ask the supervisor for a structured task plan
+    plan_response = _call_agent(sup, supervisor_mod.plan_prompt(prompt), timeout=timeout)
+    if not _is_error(plan_response):
+        _record(coord, "assistant", plan_response, agent=sup_name)
+    records.append({"step": "plan", "agent": sup_name, "response": plan_response})
+    task_plan, plan_info = supervisor_mod.parse_plan(
+        str(plan_response),
+        prompt=prompt,
+        workers=worker_names,
+        agent_for=coord.get_agent,
     )
-    if not _is_error(plan):
-        _record(coord, "assistant", plan, agent=sup_name)
-    records.append({"step": "plan", "agent": sup_name, "response": plan})
-    subtasks = [ln.strip() for ln in str(plan).splitlines() if ln.strip()]
-    if not subtasks:
-        subtasks = [str(prompt)]
 
-    # 2) delegate round-robin and solve in parallel
+    # 2) execute the plan as a DAG on the shared bounded executor.
+    # run_task already runs on a pool thread, so it must call the agent
+    # inline (_run_agent_once) instead of submitting another pool job;
+    # the scheduler's per-task deadline covers the timeout.
+    def run_task(task):
+        agent = coord.get_agent(task.agent) if task.agent else None
+        if agent is None:
+            return {"error": f"agent '{task.agent}' not registered"}
+        return _run_agent_once(agent, task.description, None, trace)
+
+    def on_event(task, result):
+        if trace is not None:
+            trace.add_task(TraceTask(
+                name=task.id, kind="task",
+                status="ok" if result.status is TaskStatus.SUCCESS else "error",
+                agent=task.agent,
+            ))
+
+    results = TaskScheduler(run_task, default_timeout=timeout).execute(task_plan, on_event=on_event)
+    for task in task_plan:
+        result = results[task.id]
+        if result.status is TaskStatus.SUCCESS:
+            _record(coord, "assistant", result.output, agent=result.agent or task.agent)
+
+    # Legacy per-worker views of the plan for API compatibility
     assigned: Dict[str, List[str]] = {}
-    for i, sub in enumerate(subtasks):
-        assigned.setdefault(worker_names[i % len(worker_names)], []).append(sub)
-    results: Dict[str, Any] = {}
-    work_trace = current_trace()
-    ex = ThreadPoolExecutor(max_workers=max(1, len(assigned)))
-    futures = {
-        ex.submit(_call_agent, coord.get_agent(w), "\n".join(tasks), None, timeout, work_trace): w
-        for w, tasks in assigned.items()
-    }
-    try:
-        for f in as_completed(futures, timeout=timeout):
-            results[futures[f]] = f.result()
-    except (TimeoutError, FuturesTimeoutError):
-        pass
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
-    for w in assigned:
-        results.setdefault(w, {"error": "timeout"})
-    for name, resp in results.items():
-        if not _is_error(resp):
-            _record(coord, "assistant", resp, agent=name)
-    records.append({"step": "work", "subtasks": subtasks, "assigned": assigned, "results": results})
+    worker_results: Dict[str, Any] = {}
+    for task in task_plan:
+        result = results[task.id]
+        if result.agent:
+            assigned.setdefault(result.agent, []).append(task.description)
+    for worker in assigned:
+        outputs = [
+            results[t.id].output
+            for t in task_plan
+            if t.agent == worker and results[t.id].status is TaskStatus.SUCCESS
+        ]
+        worker_results[worker] = "\n".join(str(o) for o in outputs) if outputs else {"error": "no successful tasks"}
+    records.append({
+        "step": "work",
+        "subtasks": [t.description for t in task_plan],
+        "assigned": assigned,
+        "results": worker_results,
+        "tasks": [results[t.id].as_dict() for t in task_plan],
+        "plan_info": plan_info,
+    })
 
     # 3) final report
-    summary = _format_statements(results)
+    summary = supervisor_mod.format_task_results(results, task_plan)
     if max_chars is not None:
         # 工人结果汇总按 max_chars 截断；最终报告本身永不截断
         summary = truncate(summary, max_chars)

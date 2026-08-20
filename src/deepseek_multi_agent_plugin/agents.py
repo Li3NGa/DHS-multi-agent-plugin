@@ -23,7 +23,7 @@ import subprocess
 import time
 from collections import OrderedDict
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional
 from urllib import error as urlerror
 from urllib import request
 
@@ -291,6 +291,7 @@ class Agent:
         memory: Optional[MessageStore] = None,
         timeout: float = 60.0,
         cache: bool = False,
+        capabilities: Optional[Iterable[str]] = None,
     ):
         self.name = name
         self.role = role
@@ -302,6 +303,7 @@ class Agent:
         self.base_url = base_url
         self.retries = int(retries)
         self.timeout = timeout
+        self.capabilities = as_capabilities(capabilities)
         self.cache = bool(cache)
         self._cache: Optional[ResponseCache] = ResponseCache() if self.cache else None
         self.cache_hits = 0
@@ -401,6 +403,7 @@ class Agent:
             "role": self.role,
             "provider": self.provider,
             "model": self.model,
+            "capabilities": sorted(self.capabilities),
             "has_handler": self._handler is not None,
             "total_usage": dict(self.total_usage),
             "cache": self.cache,
@@ -451,6 +454,7 @@ class AgentFactory:
                 retries=int(kwargs.get("retries", 2)),
                 timeout=float(kwargs.get("timeout", 60.0)),
                 cache=_as_bool(kwargs.get("cache", False)),
+                capabilities=kwargs.get("capabilities"),
             )
 
         if kind == "mock":
@@ -462,10 +466,12 @@ class AgentFactory:
                 except Exception:
                     return str(msg)
 
-            return Agent(name, handler, role=kwargs.get("role"))
+            return Agent(name, handler, role=kwargs.get("role"),
+                         capabilities=kwargs.get("capabilities"))
 
         if kind == "echo":
-            return Agent(name, lambda msg: f"{name} echo: {msg}", role=kwargs.get("role"))
+            return Agent(name, lambda msg: f"{name} echo: {msg}", role=kwargs.get("role"),
+                         capabilities=kwargs.get("capabilities"))
 
         if kind == "http":
             url = kwargs.get("url")
@@ -484,13 +490,15 @@ class AgentFactory:
                     except Exception:
                         return body.decode("utf-8")
 
-            return Agent(name, handler, role=kwargs.get("role"))
+            return Agent(name, handler, role=kwargs.get("role"),
+                         capabilities=kwargs.get("capabilities"))
 
         if kind == "custom":
             handler = kwargs.get("handler")
             if not callable(handler):
                 raise ValueError("custom agent requires a callable 'handler' kwarg")
-            return Agent(name, handler, role=kwargs.get("role"))
+            return Agent(name, handler, role=kwargs.get("role"),
+                         capabilities=kwargs.get("capabilities"))
 
         if kind == "cli":
             command = kwargs.get("command")
@@ -528,7 +536,8 @@ class AgentFactory:
                     return stdout
                 return (proc.stderr or "").strip()
 
-            return Agent(name, handler, role=kwargs.get("role"))
+            return Agent(name, handler, role=kwargs.get("role"),
+                         capabilities=kwargs.get("capabilities"))
 
         raise ValueError(f"Unknown agent kind: {kind} (mock|echo|http|deepseek|openai|custom|cli)")
 
@@ -558,3 +567,17 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)
+
+
+def as_capabilities(value: Any) -> FrozenSet[str]:
+    """Normalize a capabilities config value into a frozenset.
+
+    Accepts None, a single capability name, a comma-separated string, or
+    any iterable of names; whitespace around names is ignored.
+    """
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        return frozenset(p for p in parts if p)
+    return frozenset(str(p).strip() for p in value if str(p).strip())

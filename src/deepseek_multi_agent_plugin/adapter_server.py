@@ -19,8 +19,13 @@ coordinators (own agent registry + shared memory) via SessionManager, so
 concurrent harness tasks never see each other's discussion history.
 Sessions are bounded by --session-ttl / --max-sessions and evicted lazily.
 
-When a token is configured (--token or the DS_AGENT_TOKEN environment
-variable), every request must send ``Authorization: Bearer <token>``.
+Access control: with no tokens configured the server runs open (local
+mode). With --token, that single token gets the admin role (full access,
+matching the pre-RBAC behavior). With --role ROLE:TOKEN (repeatable, or
+$DS_AGENT_ROLES as JSON), each token maps to its role and endpoints
+enforce minimum roles (readonly < user < operator < admin; run traces,
+history and prompts need operator, registration needs admin). See
+``security.py`` for the full endpoint/role matrix.
 
 The server uses only the Python standard library. Example:
 
@@ -30,7 +35,6 @@ The server uses only the Python standard library. Example:
        -d '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
 """
 import argparse
-import hmac
 import json
 import logging
 import os
@@ -39,7 +43,7 @@ import signal
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs
 
 from .agents import AgentFactory
@@ -47,11 +51,29 @@ from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 from .observability import agent_health
+from .security import REQUIRED_ROLE, TokenAuthenticator
 from .sessions import SessionManager
 from .sessions import SessionRegistry as SessionRegistry  # re-exported pre-1.1 name
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
 MAX_REQUEST_BYTES = 1024 * 1024
+
+_GET_ACTIONS = {
+    "/health": "health",
+    "/agents": "agents",
+    "/status": "status",
+    "/runs": "runs.list",
+    "/sessions": "sessions.stats",
+    "/history": "history",
+}
+
+
+def _get_action(path: str) -> Optional[str]:
+    if path in _GET_ACTIONS:
+        return _GET_ACTIONS[path]
+    if path.startswith("/runs/"):
+        return "runs.get"
+    return None
 
 
 def redact(text: str) -> str:
@@ -76,12 +98,39 @@ class AdapterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _authorized(self) -> bool:
+    def _authenticator(self):
+        auth = getattr(self.server, "authenticator", None)
+        if auth is not None:
+            return auth
+        # ``auth_token`` 是 1.1 之前的单令牌开关：等价于一个 admin 令牌，
+        # 保持旧用法（含测试与嵌入方直接给 server 赋值）继续可用。
         token = getattr(self.server, "auth_token", None)
         if not token:
-            return True
-        header = self.headers.get("Authorization") or ""
-        return hmac.compare_digest(header, f"Bearer {token}")
+            return None
+        auth = TokenAuthenticator({"admin": token})
+        self.server.authenticator = auth
+        return auth
+
+    def _check_access(self, action: Optional[str]) -> Optional[Tuple[dict, int]]:
+        """Enforce authentication and the action's minimum role.
+
+        Returns an (error, code) pair when the request is denied, None when
+        it may proceed. Unknown actions still require a valid token when
+        tokens are configured, so 401 precedes 404.
+        """
+        auth = self._authenticator()
+        if auth is None:
+            return None
+        role = auth.authenticate(self.headers.get("Authorization") or "")
+        if role is None:
+            return ({"error": "unauthorized"}, 401)
+        if action is None:
+            return None
+        if not auth.allows(role, action):
+            log.warning("denied %s to role '%s' (requires '%s')",
+                        action, role, REQUIRED_ROLE[action])
+            return ({"error": "forbidden", "required_role": REQUIRED_ROLE[action]}, 403)
+        return None
 
     def _read_event(self):
         try:
@@ -102,10 +151,11 @@ class AdapterHandler(BaseHTTPRequestHandler):
         return event
 
     def do_GET(self):
-        if not self._authorized():
-            self._send_json({"error": "unauthorized"}, code=401)
-            return
         path = self.path.split("?")[0]
+        denied = self._check_access(_get_action(path))
+        if denied:
+            self._send_json(*denied)
+            return
         if path == "/health":
             from . import __version__
             out = {"status": "ok", "version": __version__}
@@ -180,10 +230,12 @@ class AdapterHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, code=404)
 
     def do_DELETE(self):
-        if not self._authorized():
-            self._send_json({"error": "unauthorized"}, code=401)
-            return
         path = self.path.split("?")[0]
+        action = "sessions.delete" if path.startswith("/sessions/") else None
+        denied = self._check_access(action)
+        if denied:
+            self._send_json(*denied)
+            return
         if not path.startswith("/sessions/"):
             self._send_json({"error": "not found"}, code=404)
             return
@@ -195,10 +247,16 @@ class AdapterHandler(BaseHTTPRequestHandler):
             self._send_json({"deleted": session_id})
 
     def do_POST(self):
-        if not self._authorized():
-            self._send_json({"error": "unauthorized"}, code=401)
-            return
         path = self.path.split("?")[0]
+        action = {
+            "/run": "run",
+            "/register": "register",
+            "/sessions/cleanup": "sessions.cleanup",
+        }.get(path)
+        denied = self._check_access(action)
+        if denied:
+            self._send_json(*denied)
+            return
         if path == "/sessions/cleanup":
             manager = getattr(self.server.adapter, "registry", None)
             evicted = manager.cleanup() if manager is not None else []
@@ -251,6 +309,7 @@ def build_server(
     port: int,
     coordinator: AgentCoordinator,
     token: Optional[str] = None,
+    roles: Optional[Dict[str, str]] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
     history: Optional[RunHistory] = None,
     history_prompt_limit: Optional[int] = None,
@@ -262,6 +321,8 @@ def build_server(
 
     Exposed separately so tests and embedders can attach an already-running
     server (e.g. to verify graceful shutdown without blocking a thread).
+    ``roles`` maps role name -> token; ``token`` alone is shorthand for one
+    admin token. Neither means open local mode.
     """
     server = ThreadingHTTPServer((host, port), AdapterHandler)
     # Hung agent calls must not keep the container alive forever during
@@ -280,6 +341,8 @@ def build_server(
         history_final_limit=history_final_limit,
     )
     server.auth_token = token
+    if roles:
+        server.authenticator = TokenAuthenticator(roles)
     return server
 
 
@@ -288,6 +351,7 @@ def serve(
     port: int,
     coordinator: AgentCoordinator,
     token: Optional[str] = None,
+    roles: Optional[Dict[str, str]] = None,
     session_factory: Optional[Callable[[], AgentCoordinator]] = None,
     history: Optional[RunHistory] = None,
     history_prompt_limit: Optional[int] = None,
@@ -296,10 +360,9 @@ def serve(
     max_sessions: Optional[int] = None,
 ) -> None:
     server = build_server(
-        host,
-        port,
-        coordinator,
+        host, port, coordinator,
         token=token,
+        roles=roles,
         session_factory=session_factory,
         history=history,
         history_prompt_limit=history_prompt_limit,
@@ -307,9 +370,10 @@ def serve(
         session_ttl=session_ttl,
         max_sessions=max_sessions,
     )
+    auth = "roles" if roles else ("token" if token else "off")
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
              host, port, coordinator.agent_names,
-             "on" if token else "off",
+             auth,
              "on" if session_factory else "off")
 
     def _shutdown_handler(signum, frame):  # noqa: ARG001 - signal API
@@ -335,6 +399,22 @@ def serve(
         server.server_close()
 
 
+def _parse_roles(pairs, env_json):
+    """Merge ``--role ROLE:TOKEN`` args with $DS_AGENT_ROLES (role -> token JSON)."""
+    roles: Dict[str, str] = {}
+    if env_json:
+        parsed = json.loads(env_json)
+        if not isinstance(parsed, dict):
+            raise SystemExit("$DS_AGENT_ROLES must be a JSON object of {role: token}")
+        roles.update(parsed)
+    for pair in pairs:
+        role, sep, token = pair.partition(":")
+        if not sep or not role or not token:
+            raise SystemExit(f"--role expects ROLE:TOKEN, got {pair!r}")
+        roles[role] = token
+    return roles
+
+
 def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser = argparse.ArgumentParser(description="Deepseek multi-agent plugin HTTP adapter")
     parser.add_argument("--host", default="127.0.0.1")
@@ -342,7 +422,11 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser.add_argument("--config", default=None, help="YAML/JSON agent config file")
     parser.add_argument("--demo", action="store_true", help="register demo mock agents")
     parser.add_argument("--token", default=os.environ.get("DS_AGENT_TOKEN"),
-                        help="require 'Authorization: Bearer <token>' (default: $DS_AGENT_TOKEN)")
+                        help="require 'Authorization: Bearer <token>' with admin role "
+                             "(default: $DS_AGENT_TOKEN)")
+    parser.add_argument("--role", action="append", default=[], metavar="ROLE:TOKEN",
+                        help="map a bearer token to a role (readonly/user/operator/admin); "
+                             "repeatable, overrides --token")
     parser.add_argument("--history", default=os.environ.get("DS_HISTORY_FILE"),
                         help="run history JSONL file (default: $DS_HISTORY_FILE; unset = disabled)")
     parser.add_argument("--history-prompt-limit", type=int, default=None,
@@ -378,7 +462,10 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
         coord = AgentCoordinator()
         session_factory = None
     history = RunHistory(args.history) if args.history else None
-    serve(args.host, args.port, coord, token=args.token,
+    roles = _parse_roles(args.role, os.environ.get("DS_AGENT_ROLES"))
+    serve(args.host, args.port, coord,
+          token=None if roles else args.token,
+          roles=roles or None,
           session_factory=session_factory, history=history,
           history_prompt_limit=args.history_prompt_limit,
           history_final_limit=args.history_final_limit,

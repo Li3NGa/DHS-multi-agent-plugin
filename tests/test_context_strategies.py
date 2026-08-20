@@ -111,13 +111,19 @@ def test_debate_builds_per_agent_context_and_hides_own_statements():
         coord.run("hello", strategy="debate", rounds=2)
 
     assert len(payloads) == 5  # 两轮 x 两名辩手 + 1 次裁判（默认首位 agent）
-    # 第二轮：alpha 看不到自己的发言，beta 看不到自己的发言
-    alpha_round2 = " ".join(m["content"] for m in payloads[2]["messages"])
-    beta_round2 = " ".join(m["content"] for m in payloads[3]["messages"])
-    assert "[beta]: ok" in alpha_round2
-    assert "[alpha]: ok" not in alpha_round2
-    assert "[alpha]: ok" in beta_round2
-    assert "[beta]: ok" not in beta_round2
+    # 辩手并行分发，请求到达顺序不定，不能按下标取 alpha/beta 的请求；
+    # 只有第二轮请求带 assistant 历史，按"能看到谁的发言"识别发送者。
+    round2 = [
+        " ".join(m["content"] for m in p["messages"])
+        for p in payloads
+        if any(m["role"] == "assistant" for m in p["messages"])
+    ]
+    assert len(round2) == 2
+    sees_beta = [s for s in round2 if "[beta]: ok" in s]
+    sees_alpha = [s for s in round2 if "[alpha]: ok" in s]
+    # alpha 的请求看得到 beta、看不到自己；beta 的请求反之
+    assert len(sees_beta) == 1 and "[alpha]: ok" not in sees_beta[0]
+    assert len(sees_alpha) == 1 and "[beta]: ok" not in sees_alpha[0]
 
 
 def test_debate_judge_input_truncated():

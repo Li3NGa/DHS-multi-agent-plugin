@@ -7,13 +7,17 @@ Endpoints:
   GET  /status     -> version + per-agent health counters + run count
   GET  /runs       -> recent run traces (summaries)
   GET  /runs/{id}  -> full trace (spans + tasks) of one run
+  GET  /sessions   -> session statistics (also evicts expired sessions)
+  POST /sessions/cleanup -> force session eviction, returns evicted ids
+  DELETE /sessions/{id}  -> drop one session
   POST /run        -> {"type": "run", "prompt": "...", "strategy": "...", ...}
   POST /register   -> {"type": "register", "agents": [{name, kind, ...}]}
   GET  /history    -> recent run records (when started with --history)
 
 Events may carry an optional ``session_id``; sessions get isolated
-coordinators (own agent registry + shared memory) via SessionRegistry, so
+coordinators (own agent registry + shared memory) via SessionManager, so
 concurrent harness tasks never see each other's discussion history.
+Sessions are bounded by --session-ttl / --max-sessions and evicted lazily.
 
 When a token is configured (--token or the DS_AGENT_TOKEN environment
 variable), every request must send ``Authorization: Bearer <token>``.
@@ -35,8 +39,7 @@ import signal
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Lock
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Optional, Tuple
 from urllib.parse import parse_qs
 
 from .agents import AgentFactory
@@ -44,6 +47,8 @@ from .config import build_coordinator
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
 from .observability import agent_health
+from .sessions import SessionManager
+from .sessions import SessionRegistry as SessionRegistry  # re-exported pre-1.1 name
 
 log = logging.getLogger("deepseek-multi-agent-plugin")
 MAX_REQUEST_BYTES = 1024 * 1024
@@ -60,36 +65,6 @@ def redact(text: str) -> str:
     text = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text)
     text = re.sub(r"\b(?:sk|ghp|pypi)-[A-Za-z0-9_-]+", "***", text)
     return text
-
-
-class SessionRegistry:
-    """Map session ids to isolated AgentCoordinator instances.
-
-    A ``factory`` callable builds a fresh coordinator per session (typically
-    rebuilding the configured team); without one, empty coordinators are
-    created (register agents per session via the ``register`` event).
-    """
-
-    def __init__(self, factory: Optional[Callable[[], AgentCoordinator]] = None):
-        self._factory = factory
-        self._sessions: Dict[str, AgentCoordinator] = {}
-        self._lock = Lock()
-
-    def get_or_create(self, session_id: str) -> AgentCoordinator:
-        with self._lock:
-            coord = self._sessions.get(session_id)
-            if coord is None:
-                coord = self._factory() if self._factory else AgentCoordinator()
-                self._sessions[session_id] = coord
-            return coord
-
-    def session_ids(self):
-        with self._lock:
-            return list(self._sessions)
-
-    def __len__(self) -> int:
-        with self._lock:
-            return len(self._sessions)
 
 
 class AdapterHandler(BaseHTTPRequestHandler):
@@ -179,6 +154,14 @@ class AdapterHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "run not found"}, code=404)
             else:
                 self._send_json(trace.to_dict())
+        elif path == "/sessions":
+            manager = getattr(self.server.adapter, "registry", None)
+            if manager is None:
+                self._send_json({"count": 0, "ttl": None, "max_sessions": None,
+                                 "sessions": []})
+            else:
+                manager.cleanup()
+                self._send_json(manager.stats())
         elif path == "/history":
             history = getattr(self.server.adapter, "history", None)
             if history is None:
@@ -196,11 +179,31 @@ class AdapterHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, code=404)
 
+    def do_DELETE(self):
+        if not self._authorized():
+            self._send_json({"error": "unauthorized"}, code=401)
+            return
+        path = self.path.split("?")[0]
+        if not path.startswith("/sessions/"):
+            self._send_json({"error": "not found"}, code=404)
+            return
+        manager = getattr(self.server.adapter, "registry", None)
+        session_id = path[len("/sessions/"):].strip("/")
+        if manager is None or not session_id or not manager.delete(session_id):
+            self._send_json({"error": "session not found"}, code=404)
+        else:
+            self._send_json({"deleted": session_id})
+
     def do_POST(self):
         if not self._authorized():
             self._send_json({"error": "unauthorized"}, code=401)
             return
         path = self.path.split("?")[0]
+        if path == "/sessions/cleanup":
+            manager = getattr(self.server.adapter, "registry", None)
+            evicted = manager.cleanup() if manager is not None else []
+            self._send_json({"evicted": evicted})
+            return
         if path not in ("/run", "/register"):
             self._send_json({"error": "not found"}, code=404)
             return
@@ -252,6 +255,8 @@ def build_server(
     history: Optional[RunHistory] = None,
     history_prompt_limit: Optional[int] = None,
     history_final_limit: Optional[int] = None,
+    session_ttl: Optional[float] = None,
+    max_sessions: Optional[int] = None,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
@@ -262,7 +267,11 @@ def build_server(
     # Hung agent calls must not keep the container alive forever during
     # graceful shutdown; daemon threads let ``server_close`` return promptly.
     server.daemon_threads = True
-    registry = SessionRegistry(factory=session_factory) if session_factory else None
+    registry = (
+        SessionManager(factory=session_factory, ttl=session_ttl, max_sessions=max_sessions)
+        if session_factory
+        else None
+    )
     server.adapter = DeepseekAdapter(
         coordinator,
         registry=registry,
@@ -283,6 +292,8 @@ def serve(
     history: Optional[RunHistory] = None,
     history_prompt_limit: Optional[int] = None,
     history_final_limit: Optional[int] = None,
+    session_ttl: Optional[float] = None,
+    max_sessions: Optional[int] = None,
 ) -> None:
     server = build_server(
         host,
@@ -293,6 +304,8 @@ def serve(
         history=history,
         history_prompt_limit=history_prompt_limit,
         history_final_limit=history_final_limit,
+        session_ttl=session_ttl,
+        max_sessions=max_sessions,
     )
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
              host, port, coordinator.agent_names,
@@ -336,6 +349,10 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
                         help="truncate persisted prompts to N chars (default: no truncation)")
     parser.add_argument("--history-final-limit", type=int, default=None,
                         help="truncate persisted final answers to N chars (default: no truncation)")
+    parser.add_argument("--session-ttl", type=float, default=None,
+                        help="evict sessions idle for more than N seconds (default: never)")
+    parser.add_argument("--max-sessions", type=int, default=None,
+                        help="cap the number of live sessions (least recently active evicted)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
@@ -364,7 +381,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     serve(args.host, args.port, coord, token=args.token,
           session_factory=session_factory, history=history,
           history_prompt_limit=args.history_prompt_limit,
-          history_final_limit=args.history_final_limit)
+          history_final_limit=args.history_final_limit,
+          session_ttl=args.session_ttl,
+          max_sessions=args.max_sessions)
 
 
 if __name__ == "__main__":

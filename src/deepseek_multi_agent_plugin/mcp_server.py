@@ -1,4 +1,4 @@
-"""MCP (Model Context Protocol) stdio server for the multi-agent plugin.
+﻿"""MCP (Model Context Protocol) stdio server for the multi-agent plugin.
 
 Exposes the collaboration engine to MCP hosts (DSH's dsh-mcp-client, Codex,
 Claude Code, ...) over newline-delimited JSON-RPC on stdin/stdout, using only
@@ -26,10 +26,11 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
-from .adapter_server import SessionRegistry, register_demo_agents
+from .adapter_server import register_demo_agents
 from .config import build_coordinator, load_dsh_credentials
 from .coordinator import AgentCoordinator, DeepseekAdapter
 from .history import RunHistory
+from .sessions import SessionManager
 from .strategies import STRATEGY_NAMES
 
 log = logging.getLogger("deepseek-multi-agent-plugin.mcp")
@@ -264,10 +265,10 @@ class McpServer:
                 stdout.flush()
 
 
-def _session_registry(config=None) -> SessionRegistry:
+def _session_registry(config=None) -> SessionManager:
     if config is not None:
-        return SessionRegistry(factory=lambda: build_coordinator(config=dict(config)))
-    return SessionRegistry()
+        return SessionManager(factory=lambda: build_coordinator(config=dict(config)))
+    return SessionManager()
 
 
 def main(argv=None) -> None:
@@ -298,7 +299,7 @@ def main(argv=None) -> None:
             register_demo_agents(c)
             return c
 
-        registry = SessionRegistry(factory=factory)
+        registry = SessionManager(factory=factory)
     else:
         coord = AgentCoordinator()
         registry = _session_registry()

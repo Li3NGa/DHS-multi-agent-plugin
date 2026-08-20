@@ -7,6 +7,9 @@ defaults::
       strategy: debate
       rounds: 3
       timeout_seconds: 15
+      memory:
+        capacity: 200      # max stored messages
+        max_chars: 200000  # total content budget (oldest dropped first)
     agents:
       - name: researcher
         kind: deepseek
@@ -27,6 +30,7 @@ from typing import Any, Dict, Optional
 from .agents import AgentFactory
 from .context import ContextPolicy
 from .coordinator import AgentCoordinator
+from .memory import MessageStore
 
 
 def load_dsh_credentials(path: Optional[str] = None) -> Dict[str, str]:
@@ -100,7 +104,13 @@ def build_coordinator(
     cache = coord_cfg.get("cache", False)
     if isinstance(cache, str):
         cache = cache.strip().lower() in ("1", "true", "yes", "on")
+    memory_cfg = coord_cfg.get("memory") or {}
+    memory = MessageStore(
+        capacity=_optional_int(memory_cfg.get("capacity")),
+        max_chars=_optional_int(memory_cfg.get("max_chars")),
+    ) if memory_cfg else None
     coord = AgentCoordinator(
+        memory=memory,
         timeout=float(coord_cfg.get("timeout_seconds", 15.0)),
         context_policy=context_policy,
         cache=bool(cache),
@@ -110,3 +120,7 @@ def build_coordinator(
     if coord.cache:
         coord._apply_cache(True)
     return coord
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    return int(value) if value is not None else None

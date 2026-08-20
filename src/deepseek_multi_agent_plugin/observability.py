@@ -108,6 +108,7 @@ class Trace:
         # Run-scoped state threaded through executor threads (see strategies).
         self.budget = None
         self.started_at = datetime.now().isoformat(timespec="milliseconds")
+        self._started_monotonic = time.monotonic()
         self.finished_at: Optional[str] = None
         self.status = "running"
         self.error: Optional[str] = None
@@ -202,6 +203,25 @@ class RunRegistry:
     def get(self, run_id: str) -> Optional[Trace]:
         with self._lock:
             return self._index.get(run_id)
+
+    def cleanup(self, max_age_seconds: float) -> int:
+        """Drop traces older than max_age_seconds; returns the removed count.
+
+        The deque ``limit`` already caps the number of kept traces; this
+        bounds their *age* for long-running processes.
+        """
+        cutoff = time.monotonic() - float(max_age_seconds)
+        removed = 0
+        with self._lock:
+            for trace in list(self._runs):
+                if trace._started_monotonic < cutoff:
+                    try:
+                        self._runs.remove(trace)
+                    except ValueError:
+                        continue
+                    self._index.pop(trace.run_id, None)
+                    removed += 1
+        return removed
 
     def recent(self, limit: int = 20) -> List[Dict[str, Any]]:
         """最近 limit 次运行的摘要（最新在前）。"""

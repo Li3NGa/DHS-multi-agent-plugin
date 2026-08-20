@@ -13,10 +13,17 @@ class MessageStore:
 
     Each message is a dict: {"role", "content", "agent", ...meta}.
     role is one of "user" | "assistant" | "system".
+
+    Two independent bounds keep long-lived coordinators from growing
+    forever: ``capacity`` (max message count) and ``max_chars`` (total
+    content budget; oldest messages are dropped first, the newest message
+    is always kept). ``ContextPolicy`` controls what each agent *sees*
+    per request; these bounds control what is *stored*.
     """
 
-    def __init__(self, capacity: Optional[int] = None):
+    def __init__(self, capacity: Optional[int] = None, max_chars: Optional[int] = None):
         self.capacity = capacity
+        self.max_chars = max_chars
         self._messages: List[Dict[str, Any]] = []
         self._lock = Lock()
 
@@ -32,9 +39,22 @@ class MessageStore:
         msg.update(meta)
         with self._lock:
             self._messages.append(msg)
-            if self.capacity and len(self._messages) > self.capacity:
-                self._messages = self._messages[-self.capacity:]
+            self._enforce_locked()
         return msg
+
+    def _enforce_locked(self) -> None:
+        if self.capacity and len(self._messages) > self.capacity:
+            self._messages = self._messages[-self.capacity:]
+        if self.max_chars is not None:
+            total = sum(len(str(m.get("content", ""))) for m in self._messages)
+            while len(self._messages) > 1 and total > self.max_chars:
+                total -= len(str(self._messages[0].get("content", "")))
+                self._messages.pop(0)
+
+    def chars(self) -> int:
+        """Total stored content size (for capacity statistics)."""
+        with self._lock:
+            return sum(len(str(m.get("content", ""))) for m in self._messages)
 
     def all(self) -> List[Dict[str, Any]]:
         with self._lock:

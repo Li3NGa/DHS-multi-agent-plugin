@@ -29,6 +29,7 @@ from .exceptions import (
 from .history import RunHistory
 from .memory import MessageStore
 from .observability import RunRegistry, Span, Task, Trace
+from .sessions import SessionManager
 
 __all__ = [
     "Agent",
@@ -46,6 +47,7 @@ __all__ = [
     "ResponseCache",
     "RunHistory",
     "RunRegistry",
+    "SessionManager",
     "SessionNotFound",
     "Span",
     "StrategyError",

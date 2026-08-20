@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """RunHistory 持久化与 history 事件 / HTTP 端点 / MCP 工具的测试。"""
 import json
+import os
 import threading
 from urllib import request as urlreq
+
+import pytest
 
 from deepseek_multi_agent_plugin import AgentCoordinator
 from deepseek_multi_agent_plugin.adapter_server import build_server, register_demo_agents
@@ -36,6 +39,15 @@ def test_runhistory_creates_parent_dirs_and_reloads(tmp_path):
     assert len(h2) == 1
     assert h2.recent()[0]["prompt"] == "p"
     assert h2.append({"prompt": "q"})["index"] == 2
+
+
+def test_runhistory_creates_file_with_0600_permissions(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX 权限位在 Windows 上不适用")
+    path = tmp_path / "private-runs.jsonl"
+    h = RunHistory(str(path))
+    h.append({"prompt": "secret"})
+    assert os.stat(str(path)).st_mode & 0o777 == 0o600
 
 
 def test_runhistory_concurrent_append_keeps_all(tmp_path):

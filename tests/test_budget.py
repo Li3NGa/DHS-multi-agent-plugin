@@ -92,6 +92,15 @@ def test_as_budget_rejects_unknown_keys():
         as_budget({"max_call": 5})
 
 
+def test_as_budget_rejects_negative_limits():
+    from deepseek_multi_agent_plugin.runtime import as_budget
+
+    for bad in ({"max_calls": -1}, {"max_tokens": -10},
+                {"max_cost": -0.5}, {"max_seconds": -1}):
+        with pytest.raises(ValueError, match="must be >= 0"):
+            as_budget(bad)
+
+
 # ---------------------------------------------------------------- run wiring
 def test_run_budget_dict_stops_parallel_broadcast():
     coord = AgentCoordinator()

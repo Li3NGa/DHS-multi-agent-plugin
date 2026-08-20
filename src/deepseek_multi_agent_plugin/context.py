@@ -103,7 +103,7 @@ def build_context(
         history = history[-window:] if window > 0 else []
 
     for msg in history:
-        role = msg.get("role")
+        role = msg.get("role") or ""
         if (
             policy.hide_own_statements
             and agent_name is not None
@@ -122,7 +122,7 @@ def build_context(
 
 def _project_message(msg: Dict[str, Any]) -> Dict[str, str]:
     """把一条内存消息投影成 chat 消息（无策略时也只做说话人前缀处理）。"""
-    role = msg.get("role")
+    role = msg.get("role") or ""
     content = str(msg.get("content", ""))
     if role == "assistant" and msg.get("agent"):
         content = f"[{msg['agent']}]: {content}"

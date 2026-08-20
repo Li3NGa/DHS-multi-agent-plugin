@@ -30,3 +30,16 @@ dist/
 _probe*.py
 _probe*/
 probe_root/
+_repro*.py
+_dbg*.py
+
+# Databases & secrets (defensive)
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+.credentials.yaml
+.dsh/

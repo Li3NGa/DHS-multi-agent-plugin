@@ -8,7 +8,7 @@ Deprecated pre-1.0 methods live in ``.legacy`` and are mixed in here so old
 import paths keep working. DeepseekAdapter translates harness/HTTP events
 into coordinator runs.
 """
-from threading import RLock
+from threading import BoundedSemaphore, RLock
 from typing import Any, Dict, List, Optional
 
 from .agents import Agent
@@ -209,7 +209,15 @@ class DeepseekAdapter:
     the event is routed to that session's own coordinator, giving every
     session an isolated agent registry and shared memory. Events without
     ``session_id`` keep using the default coordinator.
+
+    ``max_concurrent_runs`` caps how many run events execute at once: a
+    bounded semaphore makes an overloaded server fail fast with a clear
+    error instead of exhausting the shared worker pool or the upstream LLM
+    quota. ``MAX_REGISTER_AGENTS`` caps how many agents one register event
+    may add, so a single (authorized) request cannot balloon memory.
     """
+
+    MAX_REGISTER_AGENTS = 100
 
     def __init__(
         self,
@@ -218,12 +226,17 @@ class DeepseekAdapter:
         history=None,
         history_prompt_limit: Optional[int] = None,
         history_final_limit: Optional[int] = None,
+        max_concurrent_runs: int = 4,
+        run_gate_timeout: float = 1.0,
     ):
         self.coordinator = coordinator
         self.registry = registry
         self.history = history
         self.history_prompt_limit = history_prompt_limit
         self.history_final_limit = history_final_limit
+        self.max_concurrent_runs = max(1, int(max_concurrent_runs))
+        self._run_gate_timeout = max(0.0, float(run_gate_timeout))
+        self._run_gate = BoundedSemaphore(self.max_concurrent_runs)
 
     def _coordinator_for(self, event: Dict[str, Any]) -> AgentCoordinator:
         session_id = event.get("session_id")
@@ -276,7 +289,14 @@ class DeepseekAdapter:
                 kwargs["context"] = event["context"]
             if event.get("cache") is not None:
                 kwargs["cache"] = event["cache"]
-            result = coord.run(prompt, strategy=event.get("strategy", "auto"), **kwargs)
+            # 并发 run 限流：semaphore 满则快速失败（http 层映射为 429），
+            # 保护共享线程池与上游 LLM 配额。
+            if not self._run_gate.acquire(timeout=self._run_gate_timeout):
+                return {"error": "too many concurrent runs"}
+            try:
+                result = coord.run(prompt, strategy=event.get("strategy", "auto"), **kwargs)
+            finally:
+                self._run_gate.release()
             self._record_history(event, result)
             return result
         if t == "agents":
@@ -290,8 +310,11 @@ class DeepseekAdapter:
             }
         if t == "register":
             from .agents import AgentFactory
+            agent_configs = event.get("agents", [])
+            if len(agent_configs) > self.MAX_REGISTER_AGENTS:
+                return {"error": f"too many agents (max {self.MAX_REGISTER_AGENTS})"}
             added = []
-            for cfg in event.get("agents", []):
+            for cfg in agent_configs:
                 try:
                     agent = AgentFactory.from_config(cfg)
                 except Exception as exc:  # noqa: BLE001 - report config errors on the wire

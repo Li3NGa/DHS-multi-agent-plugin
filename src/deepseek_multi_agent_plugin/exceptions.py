@@ -42,5 +42,10 @@ class RunTimeout(DSMAError, TimeoutError):
     """Run-level deadline (``run_timeout``) exhausted."""
 
 
+class PoolSaturated(DSMAError, RuntimeError):
+    """The shared worker pool found no free slot in time; the call was not
+    dispatched. Raised instead of queueing work behind slow workers."""
+
+
 class SessionNotFound(DSMAError, KeyError):
     """Unknown session id."""

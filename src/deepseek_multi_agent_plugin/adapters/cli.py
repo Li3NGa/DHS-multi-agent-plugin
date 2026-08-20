@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Optional
 
 from ..agents import AgentFactory
 from ..config import build_coordinator
@@ -50,7 +51,8 @@ def _build(args) -> AgentCoordinator:
 
 
 def _print_result(result, as_json: bool, show_usage: bool = False,
-                  show_trace: bool = False, coordinator: AgentCoordinator = None) -> None:
+                  show_trace: bool = False,
+                  coordinator: Optional[AgentCoordinator] = None) -> None:
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

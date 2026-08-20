@@ -103,7 +103,10 @@ class SessionManager:
         evicted: List[str] = []
         if self.ttl is not None:
             for sid in list(self._sessions):
-                if now - self._last_active.get(sid, now) > self.ttl:
+                # now >= last_active + ttl (rather than now - last_active > ttl)
+                # so that ttl=0.0 evicts immediately even when creation and
+                # cleanup land on the same coarse monotonic-clock tick.
+                if now >= self._last_active.get(sid, now) + self.ttl:
                     self._drop(sid)
                     evicted.append(sid)
         if keep is not None and len(self._sessions) > keep:

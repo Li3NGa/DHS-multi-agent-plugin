@@ -41,6 +41,10 @@ class TokenAuthenticator:
         unknown = set(roles) - set(ROLE_LEVELS)
         if unknown:
             raise ValueError(f"unknown roles: {sorted(unknown)} (known: {sorted(ROLE_LEVELS)})")
+        for role, token in roles.items():
+            # 空 token 会把认证降级为“任意空 Bearer 都能通过”，直接拒绝。
+            if not isinstance(token, str) or not token.strip():
+                raise ValueError(f"empty token for role {role!r}")
         self._by_token = {token: role for role, token in roles.items()}
 
     def authenticate(self, authorization: str) -> Optional[str]:

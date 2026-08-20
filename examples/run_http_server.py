@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from deepseek_multi_agent_plugin.adapter_server import main
 
-
 if __name__ == "__main__":
     # 等价于命令行：deepseek-plugin-runner --port 8000 --demo
     main(("--port", "8000", "--demo"))

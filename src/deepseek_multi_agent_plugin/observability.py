@@ -193,7 +193,7 @@ class RunRegistry:
             trace.recorded = True
             self._runs.append(trace)
             self._index[trace.run_id] = trace
-            if len(self._index) > self._runs.maxlen:
+            if self._runs.maxlen is not None and len(self._index) > self._runs.maxlen:
                 # deque 已淘汰最老条目，同步收缩索引
                 alive = {t.run_id for t in self._runs}
                 for key in list(self._index):

@@ -26,8 +26,9 @@ class RunHistory:
         if parent:
             os.makedirs(parent, exist_ok=True)
         if not os.path.exists(path):
-            with open(path, "a", encoding="utf-8"):
-                pass
+            # 历史记录含提示词与结果，新文件以 0600 创建，避免同机其他用户可读。
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.close(fd)
         self._count = self._count_lines()
 
     def _count_lines(self) -> int:

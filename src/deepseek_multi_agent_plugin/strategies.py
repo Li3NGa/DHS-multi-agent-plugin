@@ -19,10 +19,10 @@ import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, wait
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .context import build_context, truncate
-from .exceptions import AgentNotFound, BudgetExceeded, RunTimeout, StrategyError
+from .exceptions import AgentNotFound, BudgetExceeded, PoolSaturated, RunTimeout, StrategyError
 from .observability import Span, current_trace, note_agent_call
 from .observability import Task as TraceTask
 from .runtime import clamp_timeout, current_budget, run_deadline
@@ -111,12 +111,24 @@ def _call_agent(agent, message, context=None, timeout=None, trace=None):
         return _run_agent_once(agent, message, context, trace, budget=budget)
     # decide *before* waiting whether the run deadline or the per-call
     # timeout ends the wait: comparing clocks after an early-returning
-    # wait() is racy on coarse-grained timers (Windows)
-    run_binds = run_dl is not None and run_dl - time.monotonic() <= timeout
+    # wait() is racy on coarse-grained timers (Windows). Compare absolute
+    # clock readings (run_dl <= now + timeout) rather than two independent
+    # subtractions: the latter accumulates float tail error (up to ~1e-13
+    # when the monotonic clock is large) that can flip the comparison when
+    # clamp_timeout() quantizes the returned timeout.
+    run_binds = run_dl is not None and run_dl <= time.monotonic() + timeout + 1e-6
     timed_out = threading.Event()
     # the worker thread cannot see this thread's contextvar, so the trace
     # and budget captured here are passed down explicitly
-    future = shared_executor().submit(_run_agent_once, agent, message, context, active, timed_out, budget)
+    try:
+        future = shared_executor().submit(_run_agent_once, agent, message, context, active, timed_out, budget)
+    except PoolSaturated:
+        # every worker is busy with a slow call; do not park this call in
+        # the queue behind them, fail it fast just like a timeout
+        if run_binds:
+            raise RunTimeout("run deadline exceeded") from None
+        _note_call(agent, active, "timeout", timeout, "pool saturated")
+        return {"error": "timeout"}
     try:
         return future.result(timeout=max(0.0, timeout))
     except FuturesTimeoutError:
@@ -156,13 +168,20 @@ def _parallel(
     for agent in targets:
         ctx = contexts.get(agent.name, context) if contexts is not None else context
         timed_out = threading.Event()
-        future = pool.submit(_run_agent_once, agent, message, ctx, trace, timed_out, budget)
+        try:
+            future = pool.submit(_run_agent_once, agent, message, ctx, trace, timed_out, budget)
+        except PoolSaturated:
+            _note_call(agent, trace, "timeout", timeout, "pool saturated")
+            results[agent.name] = {"error": "timeout"}
+            continue
         entries.append((future, agent, timed_out))
 
     deadline = time.monotonic() + timeout if timeout is not None else None
     # when the run deadline (not the per-call timeout) ends the wait, agents
-    # still pending at that point abort the run instead of being retried
-    run_binds = run_dl is not None and (deadline is None or run_dl <= deadline)
+    # still pending at that point abort the run instead of being retried.
+    # A 1us tolerance absorbs float tail error between run_dl and
+    # now + timeout (see _call_agent for details).
+    run_binds = run_dl is not None and (deadline is None or run_dl <= deadline + 1e-6)
     if run_binds:
         deadline = run_dl
     pending = list(entries)
@@ -636,7 +655,7 @@ def run_consensus(
     }
 
 
-STRATEGIES = {
+STRATEGIES: Dict[str, Callable[..., Dict[str, Any]]] = {
     "broadcast": run_broadcast,
     "sequential": run_sequential,
     "debate": run_debate,

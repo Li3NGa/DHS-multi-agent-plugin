@@ -4,6 +4,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] - 2026-08-21
+
+### Security
+
+- **HTTP 请求走私与 DoS 防护**：`Content-Length` 解析统一收敛到
+  `_content_length()`——负值、畸形值、重复且冲突的头部一律 400 拒绝，
+  杜绝 `read(-1)` 阻塞 worker（慢速连接 DoS）与歧义长度导致的请求走私。
+- **认证空 token 拦截**：`TokenAuthenticator` 拒绝空/空白 token；
+  `$DS_AGENT_ROLES` 中的空 token 启动时即 `SystemExit`，堵住
+  “任意空 Bearer 都能通过鉴权”的绕过路径。
+- **CSRF 缓解（开放模式）**：`POST /run` 与 `/register` 强制
+  `Content-Type: application/json`，跨站 `text/plain`/表单 simple request
+  无法再触发无鉴权服务执行 run。
+- **隐藏服务器指纹**：`Server` 响应头改为 `DHS-Multi-Agent`，不再泄露
+  Python / BaseHTTP 版本。
+- **历史文件权限**：`RunHistory` 新文件以 `0600` 权限创建，避免同机
+  其他用户读取含 prompt 与结果的记录。
+- **Docker 非 root 运行**：镜像内以专用 `dsma` 用户运行服务，纵深防御
+  容器逃逸风险。
+
+### Fixed
+
+- **负超时语义**：`start_run_deadline()` 将负 `timeout` 钳制为 0（deadline
+  立即到期），避免 `Future.result(timeout<0)` 被解释为无限等待。
+- **负预算上限拒绝**：`as_budget()` 对 `max_calls/max_tokens/max_cost/
+  max_seconds` 的负值直接 `ValueError`，而不是静默地“预算立即耗尽”。
+
+- **run deadline 浮点对齐**：`clamp_timeout()` 将剩余预算对齐到微秒，
+  消除 `deadline - monotonic()` 的浮点尾差（如 `0.3000000000001819`）；
+  `run_binds` 判定改为绝对时钟比较（`run_dl <= now + timeout + 1e-6`），
+  避免两次独立减法引入的尾差翻转 RunTimeout 语义。
+- **Session TTL=0 立即淘汰**：`SessionManager._evict_locked` 由
+  `now - last_active > ttl` 改为 `now >= last_active + ttl`，
+  `ttl=0` 在同 tick 下也能立即过期。
+- **Windows 子进程输出编码**：E2E/CLI/MCP 测试为子进程设置
+  `PYTHONIOENCODING=utf-8`，修复中文 Windows 下 `UnicodeDecodeError`。
+- **HTTP 超大请求测试加固**：`ConnectionError`/`BrokenPipeError`
+  （socket 半关闭竞态）视为服务器拒绝超大请求的等价信号。
+
+### Added
+
+- **并发 run 限流**：`DeepseekAdapter` 以有界信号量限制同时在跑的 run
+  （`max_concurrent_runs`，默认 4；CLI `--max-runs` / env
+  `DSMA_MAX_CONCURRENT_RUNS`），池满时快速失败并映射为 HTTP 429，
+  保护共享线程池与上游 LLM 配额。
+- **register 数量上限**：单个 `register` 事件最多注册 100 个 agent
+  （`DeepseekAdapter.MAX_REGISTER_AGENTS`），防止一次授权请求撑爆内存。
+- **共享池饱和门卫（P0）**：`shared_executor` 增加槽位信号量，`submit()`
+  最多等待 `DSMA_POOL_SLOT_TIMEOUT`（默认 1s）获取空闲 worker，超时抛出
+  `PoolSaturated`；策略与 DAG 调度器将其按超时降级（`{"error": "timeout"}`
+  / `TIMEOUT` + `"pool saturated"`），杜绝慢 worker 身后无限排队。
+- **CI 流水线**：`.github/workflows/ci.yml`，Linux 上跑
+  ruff + mypy + pytest（Python 3.10–3.13 矩阵）。
+- **静态类型门禁**：`pyproject.toml` 增加 `[tool.mypy]` 配置，
+  全量修复 8 个文件的 17 个类型错误（含 `observability` 中
+  `int > None` 潜在 TypeError）。
+- **ADR 文档**：`docs/adr/0001`（共享池饱和门卫）、`docs/adr/0002`
+  （deadline 浮点对齐）。
+
 ## [1.0.1] - 2026-08-17
 
 ### Fixed

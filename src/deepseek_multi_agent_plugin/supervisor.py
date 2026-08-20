@@ -98,7 +98,7 @@ def _json_candidates(text: str) -> List[str]:
 
 def _tasks_from_json(raw: List[Dict[str, Any]], router: WorkerRouter) -> List[Task]:
     tasks: List[Task] = []
-    used_ids = set()
+    used_ids: set[str] = set()
     for i, entry in enumerate(raw, 1):
         description = str(entry.get("description") or entry.get("task") or "").strip()
         if not description:

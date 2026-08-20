@@ -4,11 +4,14 @@ Pre-1.0 code drove the coordinator through ``broadcast()`` and
 ``run_cooperative_task()``; both are thin wrappers over ``run()`` now.
 New code should call ``run(strategy=...)`` directly.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 class LegacyCoordinatorAPI:
     """Mixin hosting the deprecated surface of AgentCoordinator."""
+
+    timeout: float
+    run: Callable[..., Dict[str, Any]]
 
     def broadcast(self, message: Any, timeout: Optional[float] = None) -> Dict[str, Any]:
         from .strategies import _parallel

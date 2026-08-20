@@ -20,10 +20,15 @@ _deadline: ContextVar[Optional[float]] = ContextVar("dsma_run_deadline", default
 
 
 def start_run_deadline(seconds: Optional[float]):
-    """Install a run deadline; returns a token for :func:`end_run_deadline`."""
+    """Install a run deadline; returns a token for :func:`end_run_deadline`.
+
+    Negative values are clamped to 0 (deadline already spent), keeping the
+    cooperative deadline semantics well-defined: ``Future.result(timeout<0)``
+    would otherwise wait forever instead of timing out.
+    """
     if seconds is None:
         return None
-    return _deadline.set(time.monotonic() + float(seconds))
+    return _deadline.set(time.monotonic() + max(0.0, float(seconds)))
 
 
 def end_run_deadline(token) -> None:
@@ -46,6 +51,12 @@ def clamp_timeout(timeout: Optional[float]) -> Optional[float]:
     if deadline is None:
         return timeout
     remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RunTimeout("run deadline exceeded")
+    # 对齐到微秒精度，消除浮点尾差（如 0.3000000000001819）导致的
+    # 外部断言不一致；取整误差 <=0.5us，远小于 strategies 中
+    # `run_dl - now <= timeout` 的判定余量，不会翻转 RunTimeout 语义。
+    remaining = round(remaining, 6)
     if remaining <= 0:
         raise RunTimeout("run deadline exceeded")
     return remaining if timeout is None else min(timeout, remaining)

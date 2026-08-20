@@ -62,14 +62,21 @@ OpenAI 兼容 LLM、HTTP 服务、外部 CLI 命令、纯 Python 逻辑或后备
   每次 agent 调用前预留额度，超预算立即中止，防止 supervisor/辩论/重试组合失控。
 - **统一并发模型**：全进程共享一个有界线程池（`DSMA_MAX_CONCURRENCY`，默认 16），
   per-agent 超时 + 运行级 deadline（`run_timeout`），超时任务取消不再无限等待。
+  池带饱和门卫：`submit` 最多等待 `DSMA_POOL_SLOT_TIMEOUT`（默认 1s）获取空闲
+  worker，池满时快速失败（`PoolSaturated` → 按超时降级），慢 worker 身后不会无限排队。
+  HTTP/MCP 入口另有并发 run 限流（`--max-runs`，默认 4）：同时在跑的 run 超限时
+  快速失败并返回 HTTP 429，保护线程池与上游 LLM 配额。
 - **会话生命周期**：`session_id` 隔离注册表与记忆；TTL 过期、容量上限、LRU 淘汰、
   统计与清理端点，长期运行不会内存膨胀。
 - **响应缓存**：对 model/messages/temperature/… 全参数做指纹的 LRU 缓存，
   支持 TTL 与命中统计，不同请求不会错误命中。
 - **可观测性**：每次 run 生成 Trace（span/task），有界 RunRegistry，
   `GET /runs`、`GET /runs/{id}`、`GET /status` 与 MCP `runs`/`status` 工具回查。
-- **HTTP RBAC**：readonly / user / operator / admin 四级角色，端点按最低角色鉴权；
-  日志与错误栈自动脱敏。
+- **HTTP 安全基线**：readonly / user / operator / admin 四级角色 RBAC，端点按最低
+  角色鉴权；日志与错误栈自动脱敏；`Content-Length` 负值 / 冲突 / 畸形一律 400（防
+  请求走私与慢速 DoS）；`POST` 强制 `Content-Type: application/json`（缓解跨站
+  simple-request CSRF）；`Server` 响应头隐藏 Python 版本指纹；`$DS_AGENT_ROLES`
+  空 token 拒绝启动。
 - **四种使用方式**：Python API、CLI（`deepseek-multi-agent`）、HTTP 适配服务、MCP stdio 服务。
 
 ## Installation
@@ -285,10 +292,11 @@ ruff check src tests
 
 ## Testing
 
-- 329 个测试：单元（agents / strategies / task engine / sessions / memory /
+- 344 个测试：单元（agents / strategies / task engine / sessions / memory /
   cache / budget / security）、集成（HTTP / MCP / CLI / e2e）、并发与失败注入
-  （429、5xx、连接重置、畸形响应、重试耗尽、100 会话 × 10 agent 压力）。
-- GitHub Actions 在 Python 3.10–3.13 矩阵上运行测试 + ruff + 构建 + 冒烟。
+  （429、5xx、连接重置、畸形响应、重试耗尽、100 会话 × 10 agent 压力、池饱和、
+  并发 run 限流、HTTP 请求走私 / CSRF / 认证绕过回归）。
+- GitHub Actions 在 Python 3.10–3.13 矩阵上运行测试 + ruff + mypy + 构建 + 冒烟。
 
 ## Contributing
 

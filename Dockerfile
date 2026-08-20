@@ -17,6 +17,12 @@ COPY example_config.yaml /app/example_config.yaml
 COPY docker-entrypoint.sh /usr/local/bin/deepseek-multi-agent-entrypoint
 RUN chmod +x /usr/local/bin/deepseek-multi-agent-entrypoint
 
+# 纵深防御：容器内以非 root 用户运行，避免服务被攻破后直接获得容器 root。
+RUN addgroup --system dsma && adduser --system --ingroup dsma --home /app dsma \
+    && chown -R dsma:dsma /app
+
+USER dsma
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

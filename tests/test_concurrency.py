@@ -109,6 +109,18 @@ def test_clamp_timeout_raises_once_budget_spent():
         end_run_deadline(token)
 
 
+def test_start_run_deadline_clamps_negative_seconds():
+    # 负超时被钳制为 0（deadline 立即到期），而不是让 Future.result 无限等待。
+    token = start_run_deadline(-5.0)
+    try:
+        assert run_deadline() is not None
+        with pytest.raises(RunTimeout):
+            clamp_timeout(1.0)
+    finally:
+        end_run_deadline(token)
+    assert run_deadline() is None
+
+
 def test_scheduler_deadline_aborts_plan():
     plan = TaskPlan([
         Task(id="a", description="first"),

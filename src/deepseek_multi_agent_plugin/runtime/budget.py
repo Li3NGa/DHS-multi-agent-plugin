@@ -103,7 +103,18 @@ def as_budget(value: Any) -> Optional[BudgetManager]:
         unknown = set(value) - known
         if unknown:
             raise ValueError(f"unknown budget options: {sorted(unknown)}")
-        return BudgetManager(**value)
+        limits = dict(value)
+        # 负数上限会让预算立即“耗尽”，且语义含糊（如 max_calls=-5 直接拦截
+        # 一切调用）——在入口统一拒绝，把错误暴露给调用方而不是运行时。
+        for key in ("max_calls", "max_tokens"):
+            v = limits.get(key)
+            if v is not None and int(v) < 0:
+                raise ValueError(f"{key} must be >= 0")
+        for key in ("max_cost", "max_seconds"):
+            v = limits.get(key)
+            if v is not None and float(v) < 0:
+                raise ValueError(f"{key} must be >= 0")
+        return BudgetManager(**limits)
     raise ValueError("budget must be a BudgetManager or a dict of limits")
 
 

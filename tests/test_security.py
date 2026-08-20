@@ -1,6 +1,8 @@
 ﻿"""RBAC 鉴权与日志脱敏测试。"""
+import http.client
 import json
 import threading
+import time
 from urllib import request as urlreq
 from urllib.error import HTTPError
 
@@ -33,10 +35,13 @@ def _start_roles_server():
 
 def _request(server, path, token=None, method=None, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
+    headers = _bearer(token) if token else {}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     req = urlreq.Request(
         f"http://127.0.0.1:{server.server_port}{path}",
         data=data,
-        headers=_bearer(token) if token else {},
+        headers=headers,
         method=method,
     )
     with urlreq.urlopen(req, timeout=10) as resp:
@@ -44,10 +49,15 @@ def _request(server, path, token=None, method=None, payload=None):
 
 
 def _expect_error(server, path, token, code, method="GET"):
+    headers = _bearer(token) if token else {}
+    data = None
+    if method == "POST":
+        data = b"{}"
+        headers["Content-Type"] = "application/json"
     req = urlreq.Request(
         f"http://127.0.0.1:{server.server_port}{path}",
-        data=b"{}" if method == "POST" else None,
-        headers=_bearer(token) if token else {},
+        data=data,
+        headers=headers,
         method=method,
     )
     try:
@@ -71,6 +81,14 @@ def test_authenticator_maps_token_to_role():
 def test_authenticator_rejects_unknown_roles():
     with pytest.raises(ValueError, match="unknown roles"):
         TokenAuthenticator({"superuser": "t"})
+
+
+def test_authenticator_rejects_empty_tokens():
+    # 空 token 会让任意“Bearer ”都通过鉴权——必须从构造层面拒绝。
+    with pytest.raises(ValueError, match="empty token"):
+        TokenAuthenticator({"admin": ""})
+    with pytest.raises(ValueError, match="empty token"):
+        TokenAuthenticator({"admin": "   "})
 
 
 def test_role_hierarchy_allows_and_denies():
@@ -107,6 +125,9 @@ def test_parse_roles_cli_and_env():
         _parse_roles(["bad"], None)
     with pytest.raises(SystemExit):
         _parse_roles(None, '["not", "an", "object"]')
+    # 环境变量 JSON 中的空 token 必须被拒绝（否则等于无鉴权）。
+    with pytest.raises(SystemExit):
+        _parse_roles(None, '{"admin": ""}')
 
 
 def test_redact_masks_tokens():
@@ -199,6 +220,102 @@ def test_role_token_cannot_impersonate_higher_role_endpoints():
         _expect_error(server, "/runs/missing", "user-token", 403)
         _expect_error(server, "/history", "user-token", 403)
         _expect_error(server, "/sessions", "user-token", 403)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ---------------------------------------------------------------- HTTP 加固
+def test_http_rejects_negative_content_length():
+    server = _start_roles_server()
+    try:
+        # Content-Length: -1 若被接受，read(-1) 会一直读到连接关闭（DoS）。
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/run",
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": "-1",
+                ** _bearer("admin-token"),
+            },
+            method="POST",
+        )
+        try:
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected HTTP 400")
+        except HTTPError as exc:
+            assert exc.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_rejects_ambiguous_content_length():
+    server = _start_roles_server()
+    try:
+        # 两个冲突的 Content-Length 头是请求走私特征，必须拒绝。
+        # Windows 上服务器关闭连接与客户端读取之间存在 socket 半关闭竞态，
+        # 因此对瞬时 ConnectionError 做有限重试。
+        for attempt in range(3):
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            try:
+                conn.putrequest("POST", "/run")
+                conn.putheader("Content-Type", "application/json")
+                conn.putheader("Content-Length", "2")
+                conn.putheader("Content-Length", "999")
+                conn.putheader("Authorization", "Bearer admin-token")
+                conn.endheaders()
+                conn.send(b"{}")
+                resp = conn.getresponse()
+                status = resp.status
+                resp.read()
+                conn.close()
+                assert status == 400
+                return
+            except ConnectionError:
+                conn.close()
+                if attempt == 2:
+                    raise
+                time.sleep(0.2)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_rejects_non_json_content_type():
+    server = _start_roles_server()
+    try:
+        # text/plain 是跨站 simple request，可绕过 CORS preflight——必须拒绝，
+        # 否则本地恶意网页可触发无鉴权服务执行 run。
+        req = urlreq.Request(
+            f"http://127.0.0.1:{server.server_port}/run",
+            data=b'{"type": "run", "prompt": "hi"}',
+            headers={"Content-Type": "text/plain", **_bearer("admin-token")},
+            method="POST",
+        )
+        try:
+            with urlreq.urlopen(req, timeout=10):
+                raise AssertionError("expected HTTP 415")
+        except HTTPError as exc:
+            assert exc.code == 415
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_server_header_omits_python_version():
+    server = _start_roles_server()
+    try:
+        with urlreq.urlopen(
+            urlreq.Request(
+                f"http://127.0.0.1:{server.server_port}/health",
+                headers=_bearer("ro-token"),
+            ),
+            timeout=10,
+        ) as resp:
+            server_header = resp.headers.get("Server", "")
+        assert "Python" not in server_header
+        assert server_header.startswith("DHS-Multi-Agent")
     finally:
         server.shutdown()
         server.server_close()

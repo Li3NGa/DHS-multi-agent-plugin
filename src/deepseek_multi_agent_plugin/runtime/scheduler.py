@@ -25,7 +25,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any, Callable, Dict, Optional
 
-from ..exceptions import BudgetExceeded, RunTimeout, TaskError
+from ..exceptions import BudgetExceeded, PoolSaturated, RunTimeout, TaskError
 from .executor import shared_executor
 from .task import Task, TaskPlan, TaskResult, TaskStatus
 
@@ -76,7 +76,7 @@ class TaskScheduler:
         try:
             while pending or running:
                 self._skip_blocked(pending, results, on_event)
-                self._launch_ready(pending, running, results)
+                self._launch_ready(pending, running, results, on_event)
                 if not running:
                     if pending:
                         raise TaskError("scheduler deadlock: unresolvable tasks remain")
@@ -114,6 +114,7 @@ class TaskScheduler:
         pending: Dict[str, Task],
         running: Dict[Future, _Running],
         results: Dict[str, TaskResult],
+        on_event: Optional[Callable[[Task, TaskResult], None]] = None,
     ) -> None:
         if self._deadline is not None and time.monotonic() >= self._deadline:
             raise RunTimeout("run deadline exceeded")
@@ -129,7 +130,20 @@ class TaskScheduler:
             timeout = task.timeout if task.timeout is not None else self._default_timeout
             deadline = time.monotonic() + timeout if timeout is not None else None
             task.status = TaskStatus.RUNNING
-            future = self._executor.submit(self._run_task, task)
+            try:
+                future = self._executor.submit(self._run_task, task)
+            except PoolSaturated:
+                # every worker is busy; do not park the task in the queue
+                # behind them. Finish it as TIMEOUT and try the next one.
+                result = TaskResult(
+                    task_id=task.id,
+                    status=TaskStatus.TIMEOUT,
+                    agent=task.agent,
+                    error="shared pool saturated",
+                )
+                self._finish(task, result, results, on_event)
+                del pending[task_id]
+                continue
             running[future] = _Running(task, deadline)
             del pending[task_id]
 

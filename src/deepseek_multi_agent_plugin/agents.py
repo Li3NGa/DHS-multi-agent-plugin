@@ -21,7 +21,7 @@ import random
 import subprocess
 import time
 from threading import Lock
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, cast
 from urllib import error as urlerror
 from urllib import request
 
@@ -291,7 +291,10 @@ class Agent:
         messages: List[Dict[str, str]],
         response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
-        defaults = self.PROVIDER_DEFAULTS[self.provider]
+        provider = self.provider
+        if provider is None:
+            raise RuntimeError(f"agent '{self.name}': no provider configured")
+        defaults = self.PROVIDER_DEFAULTS[provider]
         key = self.api_key or os.environ.get(defaults["env_key"])
         if not key:
             raise RuntimeError(
@@ -301,7 +304,7 @@ class Agent:
         out = chat_completion(
             base_url=url,
             api_key=key,
-            model=self.model,
+            model=self.model or defaults["model"],
             messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -519,10 +522,10 @@ class AgentFactory:
                          capabilities=kwargs.get("capabilities"))
 
         if kind == "custom":
-            handler = kwargs.get("handler")
-            if not callable(handler):
+            custom_handler = kwargs.get("handler")
+            if not callable(custom_handler):
                 raise ValueError("custom agent requires a callable 'handler' kwarg")
-            return Agent(name, handler, role=kwargs.get("role"),
+            return Agent(name, cast(Callable[[Any], Any], custom_handler), role=kwargs.get("role"),
                          capabilities=kwargs.get("capabilities"))
 
         if kind == "cli":

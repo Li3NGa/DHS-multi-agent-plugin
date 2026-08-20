@@ -3,23 +3,32 @@
 MCP stdio server subprocess, and a full LLM round trip against a local
 fake OpenAI-compatible API."""
 import json
+import os
 import subprocess
 import sys
 import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
 import deepseek_multi_agent_plugin as _pkg
 from deepseek_multi_agent_plugin import AgentCoordinator, AgentFactory
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _run_cli(*args, timeout=60):
+    env = dict(os.environ)
+    # 子进程管道输出固定为 UTF-8，避免 Windows 默认代码页（GBK）破坏中文内容解析
+    env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
         [sys.executable, "-m", "deepseek_multi_agent_plugin.cli", *args],
-        capture_output=True, text=True, encoding="utf-8", timeout=timeout,
+        cwd=str(REPO_ROOT),
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", env=env, timeout=timeout,
     )
     return proc
 
@@ -138,13 +147,19 @@ def test_http_rejects_huge_body(server):
     port = server.httpd.server_port
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
-        # 只声明超大 Content-Length、不真正上传：服务端必须在读 body 前拒绝
+        # 只声明超大 Content-Length、不真正上传：服务端必须在读 body 前拒绝。
+        # 拒绝表现为 413 响应；Windows 上服务器未读完 body 就关闭连接时，
+        # 客户端还可能看到 socket 半关闭竞态（ConnectionError 系）——
+        # 同样证明服务器没有接受超大请求。
         conn.putrequest("POST", "/run")
         conn.putheader("Content-Type", "application/json")
         conn.putheader("Content-Length", str(2 * 1024 * 1024))
         conn.endheaders()
         conn.send(b'{"type": "run"')
-        resp = conn.getresponse()
+        try:
+            resp = conn.getresponse()
+        except OSError:
+            return  # 服务端主动断开连接 = 已拒绝超大请求
         assert resp.status == 413
     finally:
         conn.close()
@@ -193,10 +208,12 @@ def test_mcp_stdio_roundtrip():
         json.dumps({"jsonrpc": "2.0", "id": 6, "method": "bogus/method"}),
         "not json at all",
     ]
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
         [sys.executable, "-m", "deepseek_multi_agent_plugin.mcp_server", "--demo"],
         input="\n".join(lines) + "\n", capture_output=True, text=True,
-        encoding="utf-8", timeout=60,
+        encoding="utf-8", errors="replace", env=env, timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     responses = {}

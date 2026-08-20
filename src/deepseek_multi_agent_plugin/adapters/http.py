@@ -58,6 +58,39 @@ from ..sessions import SessionRegistry as SessionRegistry  # re-exported pre-1.1
 log = logging.getLogger("deepseek-multi-agent-plugin")
 MAX_REQUEST_BYTES = 1024 * 1024
 
+
+def _content_length(headers) -> int:
+    """Parse and validate the ``Content-Length`` header (RFC 7230 §3.3.2).
+
+    Rejects negative lengths (a client could otherwise force ``read(-1)``,
+    which blocks the worker thread until the connection closes - a cheap
+    DoS vector) and duplicate headers with conflicting values (request
+    smuggling). Returns 0 when the header is absent.
+    """
+    values = headers.get_all("Content-Length") or []
+    if not values:
+        return 0
+    distinct = {v.strip() for v in values}
+    if len(distinct) > 1:
+        raise ValueError("ambiguous Content-Length")
+    try:
+        length = int(distinct.pop())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid Content-Length") from exc
+    if length < 0:
+        raise ValueError("invalid Content-Length")
+    return length
+
+
+class AdapterHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with the DSMA-specific attributes attached by
+    ``build_server``. Declared so type checkers see them."""
+
+    daemon_threads = True
+    adapter: "DeepseekAdapter"
+    auth_token: Optional[str]
+    authenticator: Optional[TokenAuthenticator]
+
 _GET_ACTIONS = {
     "/health": "health",
     "/agents": "agents",
@@ -90,6 +123,10 @@ def redact(text: str) -> str:
 
 
 class AdapterHandler(BaseHTTPRequestHandler):
+    def version_string(self):
+        """不暴露 ``Python/x.y`` / ``BaseHTTP`` 实现指纹（Server 响应头）。"""
+        return "DHS-Multi-Agent"
+
     def _send_json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -134,9 +171,9 @@ class AdapterHandler(BaseHTTPRequestHandler):
 
     def _read_event(self):
         try:
-            length = int(self.headers.get("Content-Length") or 0)
+            length = _content_length(self.headers)
         except ValueError as exc:
-            raise ValueError("invalid Content-Length") from exc
+            raise ValueError(str(exc)) from exc
         if length > MAX_REQUEST_BYTES:
             raise ValueError("request body too large")
         raw = self.rfile.read(length) if length else b""
@@ -265,8 +302,15 @@ class AdapterHandler(BaseHTTPRequestHandler):
         if path not in ("/run", "/register"):
             self._send_json({"error": "not found"}, code=404)
             return
+        # CSRF 防护：要求显式的 application/json Content-Type。跨站表单
+        # （application/x-www-form-urlencoded）与 text/plain 的 simple request
+        # 不触发 CORS preflight，会被此检查直接拒绝。
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            self._send_json({"error": "Content-Type must be application/json"}, code=415)
+            return
         try:
-            length = int(self.headers.get("Content-Length") or 0)
+            length = _content_length(self.headers)
         except ValueError:
             self._send_json({"error": "invalid Content-Length"}, code=400)
             return
@@ -282,6 +326,8 @@ class AdapterHandler(BaseHTTPRequestHandler):
         try:
             result = self.server.adapter.handle_harness_event(event)
             code = 400 if "error" in result else 200
+            if result.get("error") == "too many concurrent runs":
+                code = 429  # RFC 6585 语义：当前并发 run 已满
             self._send_json(result, code=code)
         except Exception as exc:
             # 记录完整异常（含 traceback），但先整体脱敏，避免凭据进入日志。
@@ -316,6 +362,7 @@ def build_server(
     history_final_limit: Optional[int] = None,
     session_ttl: Optional[float] = None,
     max_sessions: Optional[int] = None,
+    max_concurrent_runs: int = 4,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
@@ -324,10 +371,9 @@ def build_server(
     ``roles`` maps role name -> token; ``token`` alone is shorthand for one
     admin token. Neither means open local mode.
     """
-    server = ThreadingHTTPServer((host, port), AdapterHandler)
+    server = AdapterHTTPServer((host, port), AdapterHandler)
     # Hung agent calls must not keep the container alive forever during
     # graceful shutdown; daemon threads let ``server_close`` return promptly.
-    server.daemon_threads = True
     registry = (
         SessionManager(factory=session_factory, ttl=session_ttl, max_sessions=max_sessions)
         if session_factory
@@ -339,6 +385,7 @@ def build_server(
         history=history,
         history_prompt_limit=history_prompt_limit,
         history_final_limit=history_final_limit,
+        max_concurrent_runs=max_concurrent_runs,
     )
     server.auth_token = token
     if roles:
@@ -358,6 +405,7 @@ def serve(
     history_final_limit: Optional[int] = None,
     session_ttl: Optional[float] = None,
     max_sessions: Optional[int] = None,
+    max_concurrent_runs: int = 4,
 ) -> None:
     server = build_server(
         host, port, coordinator,
@@ -369,6 +417,7 @@ def serve(
         history_final_limit=history_final_limit,
         session_ttl=session_ttl,
         max_sessions=max_sessions,
+        max_concurrent_runs=max_concurrent_runs,
     )
     auth = "roles" if roles else ("token" if token else "off")
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
@@ -406,6 +455,10 @@ def _parse_roles(pairs, env_json):
         parsed = json.loads(env_json)
         if not isinstance(parsed, dict):
             raise SystemExit("$DS_AGENT_ROLES must be a JSON object of {role: token}")
+        for role, token in parsed.items():
+            if not isinstance(token, str) or not token.strip():
+                raise SystemExit(
+                    f"$DS_AGENT_ROLES role {role!r} needs a non-empty token")
         roles.update(parsed)
     for pair in pairs:
         role, sep, token = pair.partition(":")
@@ -437,26 +490,31 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
                         help="evict sessions idle for more than N seconds (default: never)")
     parser.add_argument("--max-sessions", type=int, default=None,
                         help="cap the number of live sessions (least recently active evicted)")
+    parser.add_argument("--max-runs", type=int,
+                        default=os.environ.get("DSMA_MAX_CONCURRENT_RUNS", "4"),
+                        help="cap concurrent run events (default: $DSMA_MAX_CONCURRENT_RUNS or 4)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     from ..config import load_config, load_dsh_credentials
     load_dsh_credentials()  # DEEPSEEK_API_KEY from ~/.dsh/.credentials.yaml if present
+    session_factory: Optional[Callable[[], AgentCoordinator]]
     if args.config:
         config = load_config(args.config)
         coord = build_coordinator(config=config)
 
-        def session_factory():
+        def session_factory() -> AgentCoordinator:
             return build_coordinator(config=dict(config))
     elif args.demo:
         coord = AgentCoordinator()
 
-        def session_factory():
+        def make_demo() -> AgentCoordinator:
             c = AgentCoordinator()
             register_demo_agents(c)
             return c
 
+        session_factory = make_demo
         register_demo_agents(coord)
     else:
         coord = AgentCoordinator()
@@ -470,7 +528,8 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
           history_prompt_limit=args.history_prompt_limit,
           history_final_limit=args.history_final_limit,
           session_ttl=args.session_ttl,
-          max_sessions=args.max_sessions)
+          max_sessions=args.max_sessions,
+          max_concurrent_runs=args.max_runs)
 
 
 if __name__ == "__main__":

@@ -211,7 +211,14 @@ def _parallel(
         future.cancel()
         results.setdefault(agent.name, {"error": "timeout"})
         _note_call(agent, trace, "timeout", timeout or 0.0, "timeout")
-    return results
+    # 线程池并发收集结果时，插入顺序取决于各 future 的完成顺序，可能与
+    # 注册顺序不一致；为保持后续 _join/rounds 输出稳定，按 targets
+    # （注册/提交顺序）重建 results 的键序。
+    ordered: Dict[str, Any] = {}
+    for agent in targets:
+        if agent.name in results:
+            ordered[agent.name] = results[agent.name]
+    return ordered
 
 
 def _cancel_entries(entries) -> None:

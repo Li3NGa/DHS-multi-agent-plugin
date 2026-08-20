@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from deepseek_multi_agent_plugin.exceptions import BudgetExceeded, PlanError, TaskError
+from deepseek_multi_agent_plugin.exceptions import BudgetExceeded, PlanError
 from deepseek_multi_agent_plugin.runtime import (
     Task,
     TaskPlan,

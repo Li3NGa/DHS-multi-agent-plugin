@@ -1,7 +1,0 @@
-move http, mcp and cli adapters into an adapters package
-
-The core runtime already had no imports from the transport layer; this
-makes the layering visible in the layout as well. adapter_server.py,
-mcp_server.py and cli.py stay as re-export shims so the pre-1.1 import
-paths (including `python -m deepseek_multi_agent_plugin.adapter_server`)
-keep working, and console entry points now target the new modules.

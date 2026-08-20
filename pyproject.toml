@@ -31,9 +31,9 @@ Changelog = "https://github.com/Li3NGa/deepseek-multi-agent-plugin/blob/main/CHA
 dev = ["pytest", "pyyaml", "ruff", "build"]
 
 [project.scripts]
-deepseek-multi-agent = "deepseek_multi_agent_plugin.cli:main"
-deepseek-plugin-runner = "deepseek_multi_agent_plugin.adapter_server:main"
-deepseek-multi-agent-mcp = "deepseek_multi_agent_plugin.mcp_server:main"
+deepseek-multi-agent = "deepseek_multi_agent_plugin.adapters.cli:main"
+deepseek-plugin-runner = "deepseek_multi_agent_plugin.adapters.http:main"
+deepseek-multi-agent-mcp = "deepseek_multi_agent_plugin.adapters.mcp:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

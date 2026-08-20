@@ -5,8 +5,8 @@ import threading
 from http.server import ThreadingHTTPServer
 from urllib import request as urlreq
 
-import deepseek_multi_agent_plugin.adapter_server as adapter_mod
-from deepseek_multi_agent_plugin.adapter_server import AdapterHandler, build_server, register_demo_agents
+import deepseek_multi_agent_plugin.adapters.http as adapter_mod
+from deepseek_multi_agent_plugin.adapters.http import AdapterHandler, build_server, register_demo_agents
 from deepseek_multi_agent_plugin.coordinator import AgentCoordinator, DeepseekAdapter
 
 

@@ -1,28 +1,34 @@
-"""Agent coordination primitives and the DeepSeek harness adapter.
+"""Agent coordination core.
 
-AgentCoordinator owns the agent registry and the shared discussion memory,
-and dispatches tasks to the collaboration strategies implemented in
-``.strategies`` (broadcast, sequential, debate, supervisor, consensus).
+AgentCoordinator owns the agent registry, the shared discussion memory and
+run dispatch: it creates the run trace, picks the strategy (or honors the
+requested one), hands execution to ``.strategies`` and records the outcome.
 
-DeepseekAdapter translates harness/HTTP events into coordinator runs so
-external systems (e.g. the DeepSeek Harness) can drive the plugin over
-JSON without importing this package.
+Deprecated pre-1.0 methods live in ``.legacy`` and are mixed in here so old
+import paths keep working. DeepseekAdapter translates harness/HTTP events
+into coordinator runs.
 """
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from .agents import Agent
 from .context import ContextPolicy
+from .legacy import LegacyCoordinatorAPI
 from .memory import MessageStore
 from .observability import RunRegistry, Trace, activate_trace, restore_trace
 
 
-class AgentCoordinator:
-    """Registry of agents plus the shared memory and strategy dispatch.
+class AgentCoordinator(LegacyCoordinatorAPI):
+    """Agent registry plus strategy dispatch.
 
     The registry is guarded by a lock so HTTP-driven registration can happen
     concurrently with running collaborations (property access returns an
     immutable snapshot).
+
+    Note: passing ``context``/``cache`` to :meth:`run` updates the
+    coordinator-level defaults (sticky configuration), matching the
+    historical behavior where a harness configures compression once and
+    every later run inherits it.
     """
 
     def __init__(
@@ -42,8 +48,6 @@ class AgentCoordinator:
 
     # -- registry ---------------------------------------------------------
     def register_agent(self, agent: Agent, replace: bool = True) -> None:
-        """Register an agent; optionally replace an existing one with the
-        same name."""
         with self._lock:
             if agent.name in self._agents and not replace:
                 raise ValueError(f"agent '{agent.name}' already registered")
@@ -77,23 +81,23 @@ class AgentCoordinator:
         """Run a collaborative task with the named strategy.
 
         strategy: one of broadcast | sequential | debate | supervisor |
-        consensus | auto. With "auto", a strategy is picked from the
-        registered agents (see _auto_strategy).
+        consensus | relay | auto. With "auto", a strategy is picked from the
+        registered agents.
 
         Extra kwargs (rounds, judge, order, workers, timeout, ...) are
-        forwarded to the strategy function.
+        forwarded to the strategy function. Two run-level switches are
+        consumed by the coordinator itself:
 
-        Two extra run-level switches are consumed by the coordinator itself:
-
-        - ``context``: a ``ContextPolicy`` instance or a dict with
-          ``window`` / ``max_chars`` / ``hide_own`` keys; overrides the
-          coordinator-level policy for this run.
-        - ``cache``: bool; enables (or disables) the in-process LLM response
-          cache on the registered LLM agents for this run.
+        - ``context``: a ContextPolicy or dict with window/max_chars/hide_own
+          keys; replaces the coordinator-level policy from this run on.
+        - ``cache``: bool; enables/disables the in-process LLM response
+          cache on the registered LLM agents from this run on.
+        - ``session_id``: optional correlation id stamped on the run trace.
         """
         from . import strategies  # local import keeps module graph acyclic
         context = kwargs.pop("context", None)
         cache = kwargs.pop("cache", None)
+        session_id = kwargs.pop("session_id", None)
         if context is not None:
             if isinstance(context, ContextPolicy):
                 self.context_policy = context
@@ -106,9 +110,7 @@ class AgentCoordinator:
             raise RuntimeError("no agents registered")
         if (strategy or "").lower() == "auto":
             strategy = self._auto_strategy()
-        # 可观测性：本次 run 的 trace 贯穿所有策略调用（span/task），
-        # 结束后进入 self.runs 供 HTTP / MCP 查询；无监听方时零额外成本。
-        trace = Trace(prompt=prompt, strategy=strategy)
+        trace = Trace(prompt=prompt, strategy=strategy, session_id=session_id)
         token = activate_trace(trace)
         try:
             try:
@@ -128,13 +130,13 @@ class AgentCoordinator:
             raise
 
     def _apply_cache(self, enabled: bool) -> None:
-        """为已注册的 LLM agent 打开/关闭进程内响应缓存。"""
+        """Enable/disable the in-process response cache on registered LLM agents."""
+        from .agents import ResponseCache
         for agent in self.agents:
             if agent.provider is None:
                 continue
             agent.cache = bool(enabled)
             if enabled and agent._cache is None:
-                from .agents import ResponseCache
                 agent._cache = ResponseCache()
 
     def _auto_strategy(self) -> str:
@@ -147,19 +149,6 @@ class AgentCoordinator:
             return "supervisor"
         return "debate"
 
-    # -- backward-compatible helpers ----------------------------------------
-    def broadcast(self, message: Any, timeout: Optional[float] = None) -> Dict[str, Any]:
-        """Legacy: ask every agent in parallel for a single message."""
-        from .strategies import _parallel
-        return _parallel(self, message, timeout=timeout if timeout is not None else self.timeout)
-
-    def run_cooperative_task(self, initial_prompt: str, rounds: int = 3) -> List[Dict[str, Any]]:
-        """Legacy API kept for compatibility: same as ``run(..., strategy="broadcast")``.
-        Returns the list of round records."""
-        result = self.run(initial_prompt, strategy="broadcast", rounds=rounds,
-                          timeout=self.timeout)
-        return result["rounds"]
-
 
 class DeepseekAdapter:
     """Translate harness events into AgentCoordinator runs.
@@ -168,19 +157,19 @@ class DeepseekAdapter:
 
     - {"type": "run", "prompt": str, "strategy": str, "rounds": int,
        "judge": str, "order": [names], "workers": [names], "timeout": float,
-       "context": {"window": int, "max_chars": int, "hide_own": bool} (optional),
-       "cache": bool (optional), "session_id": str (optional)}
+       "context": {...} (optional), "cache": bool (optional),
+       "session_id": str (optional)}
     - {"type": "agents"}            -> registered agents
     - {"type": "status"}            -> status summary
     - {"type": "register", "agents": [{name, kind, ...}]}  -> register from config dicts
     - {"type": "history", "limit": int}                     -> recent run records
       (only when a RunHistory was provided at construction)
 
-    When a ``registry`` (a SessionRegistry or any callable mapping
-    session ids to coordinators) is provided and an event carries a
-    ``session_id``, the event is routed to that session's own coordinator,
-    giving every session an isolated agent registry and shared memory.
-    Events without ``session_id`` keep using the default coordinator.
+    When a ``registry`` (a SessionManager or any callable mapping session
+    ids to coordinators) is provided and an event carries a ``session_id``,
+    the event is routed to that session's own coordinator, giving every
+    session an isolated agent registry and shared memory. Events without
+    ``session_id`` keep using the default coordinator.
     """
 
     def __init__(
@@ -204,7 +193,7 @@ class DeepseekAdapter:
         return self.coordinator
 
     def _record_history(self, event: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """run 成功后把结果摘要写入 RunHistory（若启用）；失败不记录。"""
+        """Append a run summary to RunHistory (when enabled); failures are skipped."""
         if self.history is None or not isinstance(result, dict) or "error" in result:
             return
         meta = result.get("meta") or {}
@@ -224,7 +213,6 @@ class DeepseekAdapter:
 
     @staticmethod
     def _truncate(value: Any, limit: Optional[int]) -> Any:
-        """Truncate string fields for privacy/volume control (None = keep as-is)."""
         if limit is None or not isinstance(value, str):
             return value
         limit = max(0, int(limit))
@@ -241,20 +229,15 @@ class DeepseekAdapter:
             prompt = event.get("prompt", "")
             if not prompt:
                 return {"error": "missing prompt"}
-            kwargs: Dict[str, Any] = {}
+            kwargs: Dict[str, Any] = {"session_id": event.get("session_id")}
             for key in ("rounds", "judge", "order", "workers", "timeout"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
-            # 上下文压缩与缓存开关（run 事件可选字段，直接透传给 coordinator.run）
             if event.get("context") is not None:
                 kwargs["context"] = event["context"]
             if event.get("cache") is not None:
                 kwargs["cache"] = event["cache"]
-            result = coord.run(
-                prompt,
-                strategy=event.get("strategy", "auto"),
-                **kwargs,
-            )
+            result = coord.run(prompt, strategy=event.get("strategy", "auto"), **kwargs)
             self._record_history(event, result)
             return result
         if t == "agents":

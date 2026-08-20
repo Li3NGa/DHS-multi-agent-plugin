@@ -21,6 +21,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List, Optional, Sequence
 
 from .context import build_context, truncate
+from .exceptions import AgentNotFound, StrategyError
 from .observability import Span, current_trace, note_agent_call
 
 
@@ -210,7 +211,7 @@ def run_sequential(
     names = [a.name for a in coord.agents] if not order else list(order)
     missing = [n for n in names if coord.get_agent(n) is None]
     if missing:
-        raise ValueError(f"sequential: unknown agents in order: {missing}")
+        raise AgentNotFound(f"sequential: unknown agents in order: {missing}")
     records = []
     transcript = str(prompt)
     max_chars = _max_chars(coord)
@@ -250,7 +251,7 @@ def run_debate(
     records = []
     names = [a.name for a in coord.agents]
     if len(names) < 2:
-        raise ValueError("debate needs at least two agents")
+        raise StrategyError("debate needs at least two agents")
     policy = _policy(coord)
     max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
@@ -275,7 +276,7 @@ def run_debate(
     judge_name = judge or ("judge" if "judge" in names else names[0])
     judge_agent = coord.get_agent(judge_name)
     if judge_agent is None:
-        raise ValueError(f"debate: judge agent '{judge_name}' not registered")
+        raise AgentNotFound(f"debate: judge agent '{judge_name}' not registered")
     judge_input = (
         f"{prompt}\n\n以下是各位辩手的观点:\n{_format_statements(last_responses)}\n\n"
         "请以裁判身份综合所有观点，给出最终结论与理由。"
@@ -314,13 +315,13 @@ def run_supervisor(
     sup_name = supervisor or ("supervisor" if "supervisor" in names else names[0])
     sup = coord.get_agent(sup_name)
     if sup is None:
-        raise ValueError(f"supervisor: agent '{sup_name}' not registered")
+        raise AgentNotFound(f"supervisor: agent '{sup_name}' not registered")
     worker_names = list(workers) if workers else [n for n in names if n != sup_name]
     if not worker_names:
-        raise ValueError("supervisor strategy needs at least one worker besides the supervisor")
+        raise StrategyError("supervisor strategy needs at least one worker besides the supervisor")
     missing = [n for n in worker_names if coord.get_agent(n) is None]
     if missing:
-        raise ValueError(f"supervisor: unknown worker agents: {missing}")
+        raise AgentNotFound(f"supervisor: unknown worker agents: {missing}")
 
     records = []
     _record(coord, "user", prompt)
@@ -403,10 +404,10 @@ def run_relay(
     start = time.time()
     names = [a.name for a in coord.agents] if not order else list(order)
     if len(names) < 2:
-        raise ValueError("relay needs at least two agents")
+        raise StrategyError("relay needs at least two agents")
     missing = [n for n in names if coord.get_agent(n) is None]
     if missing:
-        raise ValueError(f"relay: unknown agents in order: {missing}")
+        raise AgentNotFound(f"relay: unknown agents in order: {missing}")
     records = []
     draft = str(prompt)
     max_chars = _max_chars(coord)
@@ -469,7 +470,7 @@ def run_consensus(
     start = time.time()
     names = [a.name for a in coord.agents]
     if len(names) < 2:
-        raise ValueError("consensus needs at least two agents")
+        raise StrategyError("consensus needs at least two agents")
     records = []
     max_chars = _max_chars(coord)
     _record(coord, "user", prompt)
@@ -540,6 +541,6 @@ def run_strategy(coord, strategy: str, prompt: str, **kwargs) -> Dict[str, Any]:
     """Dispatch to a named strategy (raises ValueError on unknown names)."""
     fn = STRATEGIES.get((strategy or "").lower())
     if fn is None:
-        raise ValueError(f"Unknown strategy: {strategy} (available: {sorted(STRATEGIES)})")
+        raise StrategyError(f"Unknown strategy: {strategy} (available: {sorted(STRATEGIES)})")
     filtered = {k: v for k, v in kwargs.items() if k in inspect.signature(fn).parameters}
     return fn(coord, prompt, **filtered)

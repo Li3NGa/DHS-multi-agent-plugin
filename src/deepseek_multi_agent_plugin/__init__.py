@@ -15,6 +15,17 @@ from .agents import Agent, AgentFactory, ResponseCache, chat_completion
 from .config import build_coordinator, load_config
 from .context import ContextPolicy, build_context, truncate
 from .coordinator import AgentCoordinator, DeepseekAdapter
+from .exceptions import (
+    AgentError,
+    AgentNotFound,
+    BudgetExceeded,
+    DSMAError,
+    PlanError,
+    ProviderError,
+    SessionNotFound,
+    StrategyError,
+    TaskError,
+)
 from .history import RunHistory
 from .memory import MessageStore
 from .observability import RunRegistry, Span, Task, Trace
@@ -22,15 +33,24 @@ from .observability import RunRegistry, Span, Task, Trace
 __all__ = [
     "Agent",
     "AgentCoordinator",
+    "AgentError",
     "AgentFactory",
+    "AgentNotFound",
+    "BudgetExceeded",
     "ContextPolicy",
+    "DSMAError",
     "DeepseekAdapter",
     "MessageStore",
+    "PlanError",
+    "ProviderError",
     "ResponseCache",
     "RunHistory",
     "RunRegistry",
+    "SessionNotFound",
     "Span",
+    "StrategyError",
     "Task",
+    "TaskError",
     "Trace",
     "build_coordinator",
     "build_context",

@@ -100,10 +100,13 @@ def _step_status(record: Dict[str, Any]) -> str:
 class Trace:
     """一次协作运行的完整观测记录。"""
 
-    def __init__(self, prompt: str, strategy: str):
+    def __init__(self, prompt: str, strategy: str, session_id: Optional[str] = None):
         self.run_id = uuid.uuid4().hex[:12]
         self.prompt = str(prompt)[:200]
         self.strategy = strategy
+        self.session_id = session_id
+        # Run-scoped state threaded through executor threads (see strategies).
+        self.budget = None
         self.started_at = datetime.now().isoformat(timespec="milliseconds")
         self.finished_at: Optional[str] = None
         self.status = "running"
@@ -151,6 +154,7 @@ class Trace:
             "strategy": self.strategy,
             "status": self.status,
             "prompt": self.prompt,
+            "session_id": self.session_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "spans": len(spans),

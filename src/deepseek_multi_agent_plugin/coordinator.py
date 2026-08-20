@@ -16,7 +16,13 @@ from .context import ContextPolicy
 from .legacy import LegacyCoordinatorAPI
 from .memory import MessageStore
 from .observability import RunRegistry, Trace, activate_trace, restore_trace
-from .runtime import end_run_deadline, start_run_deadline
+from .runtime import (
+    as_budget,
+    end_run_budget,
+    end_run_deadline,
+    start_run_budget,
+    start_run_deadline,
+)
 
 
 class AgentCoordinator(LegacyCoordinatorAPI):
@@ -38,6 +44,7 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         timeout: float = 15.0,
         context_policy: Optional[ContextPolicy] = None,
         cache: bool = False,
+        budget: Optional[Dict[str, Any]] = None,
     ):
         self._agents: Dict[str, Agent] = {}
         self._lock = RLock()
@@ -45,6 +52,7 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         self.timeout = timeout
         self.context_policy = context_policy
         self.cache = bool(cache)
+        self.default_budget = budget
         self.runs = RunRegistry()
 
     # -- registry ---------------------------------------------------------
@@ -93,6 +101,13 @@ class AgentCoordinator(LegacyCoordinatorAPI):
           own ``timeout`` (15s), so a run never waits on a hung agent forever.
         - ``run_timeout``: budget for the whole run. Once spent, no new agent
           call or task is dispatched and RunTimeout aborts the run.
+        - ``budget``: BudgetManager or dict with max_calls / max_tokens /
+          max_cost / max_seconds / pricer. Every agent call reserves one
+          slot up front; a spent budget raises BudgetExceeded. max_seconds
+          is wall-clock and flows into the run deadline (RunTimeout). The
+          final usage snapshot lands in ``meta["budget"]``. When absent,
+          the coordinator's ``budget`` constructor defaults are applied
+          fresh to every run.
         - ``context``: a ContextPolicy or dict with window/max_chars/hide_own
           keys; replaces the coordinator-level policy from this run on.
         - ``cache``: bool; enables/disables the in-process LLM response
@@ -104,6 +119,16 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         cache = kwargs.pop("cache", None)
         session_id = kwargs.pop("session_id", None)
         run_timeout = kwargs.pop("run_timeout", None)
+        budget_opt = kwargs.pop("budget", None)
+        if budget_opt is None and self.default_budget is not None:
+            budget_opt = dict(self.default_budget)
+        budget = as_budget(budget_opt)
+        if budget is not None and budget.max_seconds is not None:
+            run_timeout = (
+                budget.max_seconds
+                if run_timeout is None
+                else min(run_timeout, budget.max_seconds)
+            )
         if context is not None:
             if isinstance(context, ContextPolicy):
                 self.context_policy = context
@@ -120,16 +145,20 @@ class AgentCoordinator(LegacyCoordinatorAPI):
         trace = Trace(prompt=prompt, strategy=strategy, session_id=session_id)
         token = activate_trace(trace)
         deadline_token = start_run_deadline(run_timeout)
+        budget_token = start_run_budget(budget)
         try:
             try:
                 result = strategies.run_strategy(self, strategy, prompt, **kwargs)
             finally:
+                end_run_budget(budget_token)
                 end_run_deadline(deadline_token)
                 restore_trace(token)
             trace.tasks_from_rounds(result.get("rounds") or [])
             meta = result.setdefault("meta", {}) if isinstance(result, dict) else None
             if meta is not None:
                 meta["run_id"] = trace.run_id
+                if budget is not None:
+                    meta["budget"] = budget.snapshot()
             trace.finish()
             self.runs.record(trace)
             return result
@@ -240,7 +269,7 @@ class DeepseekAdapter:
             if not prompt:
                 return {"error": "missing prompt"}
             kwargs: Dict[str, Any] = {"session_id": event.get("session_id")}
-            for key in ("rounds", "judge", "order", "workers", "timeout", "run_timeout"):
+            for key in ("rounds", "judge", "order", "workers", "timeout", "run_timeout", "budget"):
                 if event.get(key) is not None:
                     kwargs[key] = event[key]
             if event.get("context") is not None:

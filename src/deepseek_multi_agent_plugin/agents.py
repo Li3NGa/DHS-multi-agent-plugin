@@ -14,19 +14,18 @@ prompt plus exactly one *backend*:
 AgentFactory builds agents from kind strings or config dicts so that
 YAML/JSON configuration can describe whole agent teams.
 """
-import hashlib
 import json
 import math
 import os
 import random
 import subprocess
 import time
-from collections import OrderedDict
 from threading import Lock
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional
 from urllib import error as urlerror
 from urllib import request
 
+from .cache import ResponseCache, request_fingerprint
 from .memory import MessageStore
 
 # --------------------------------------------------------------------------
@@ -35,44 +34,6 @@ from .memory import MessageStore
 # HTTP statuses worth retrying (rate limit + transient server errors).
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 MAX_BACKOFF_SECONDS = 8.0
-
-
-class ResponseCache:
-    """线程安全的进程内 LRU 响应缓存（纯标准库实现）。
-
-    基于 ``collections.OrderedDict`` + ``Lock``；``maxsize`` 为缓存条目上限，
-    超出后淘汰最久未使用的条目。key 是调用方给定的任意可哈希值（通常由
-    :func:`chat_completion` 计算出的 sha256 摘要字符串）。
-    """
-
-    def __init__(self, maxsize: int = 128):
-        self.maxsize = max(1, int(maxsize))
-        self._data: "OrderedDict[str, str]" = OrderedDict()
-        self._lock = Lock()
-
-    def get(self, key: str) -> Optional[str]:
-        """读取缓存；命中时把条目移到末尾（LRU）。"""
-        with self._lock:
-            value = self._data.get(key)
-            if value is not None:
-                self._data.move_to_end(key)
-            return value
-
-    def put(self, key: str, value: str) -> None:
-        """写入缓存；超出 maxsize 时淘汰最久未使用的条目。"""
-        with self._lock:
-            self._data[key] = value
-            self._data.move_to_end(key)
-            if len(self._data) > self.maxsize:
-                self._data.popitem(last=False)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._data.clear()
-
-    def __len__(self) -> int:
-        with self._lock:
-            return len(self._data)
 
 
 def _max_backoff_seconds() -> float:
@@ -129,26 +90,23 @@ def chat_completion(
     ``response_format`` (e.g. ``{"type": "json_object"}``) is forwarded to the
     API verbatim for structured-output mode.
 
-    With ``cache`` set, successful responses are cached keyed by
-    ``(base_url, model, messages, temperature, max_tokens, response_format)``;
-    a cache hit returns immediately without any HTTP call, and with
-    ``return_usage=True`` its usage dict is marked ``{"cache_hit": True}``
-    (all token counters zero).
+    With ``cache`` set, successful responses are cached keyed by a
+    fingerprint over every reply-affecting parameter (base_url, model,
+    messages, temperature, max_tokens, response_format); a cache hit
+    returns immediately without any HTTP call, and with ``return_usage=True``
+    its usage dict is marked ``{"cache_hit": True}`` (all token counters
+    zero).
     """
     cache_key = None
     if cache is not None:
-        key_material = (
-            base_url,
-            model,
-            messages,
-            temperature,
-            max_tokens,
-            response_format,
+        digest = request_fingerprint(
+            provider=base_url,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
         )
-        digest = hashlib.sha256(
-            json.dumps(key_material, ensure_ascii=False, sort_keys=True, default=str)
-            .encode("utf-8")
-        ).hexdigest()
         cached = cache.get(digest)
         if cached is not None:
             if return_usage:

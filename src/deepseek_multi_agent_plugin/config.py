@@ -7,6 +7,10 @@ defaults::
       strategy: debate
       rounds: 3
       timeout_seconds: 15
+      budget:              # default per-run limits (fresh budget every run)
+        max_calls: 50
+        max_tokens: 200000
+        max_seconds: 300
       memory:
         capacity: 200      # max stored messages
         max_chars: 200000  # total content budget (oldest dropped first)
@@ -109,11 +113,13 @@ def build_coordinator(
         capacity=_optional_int(memory_cfg.get("capacity")),
         max_chars=_optional_int(memory_cfg.get("max_chars")),
     ) if memory_cfg else None
+    budget = coord_cfg.get("budget")
     coord = AgentCoordinator(
         memory=memory,
         timeout=float(coord_cfg.get("timeout_seconds", 15.0)),
         context_policy=context_policy,
         cache=bool(cache),
+        budget=dict(budget) if isinstance(budget, dict) else None,
     )
     for acfg in cfg.get("agents") or []:
         coord.register_agent(AgentFactory.from_config(acfg))

@@ -16,6 +16,12 @@ coordinator:
     max_chars: 2000    # 可选：每条历史消息保留前 2000 个字符并追加省略号 "…"
     hide_own: false    # 可选：辩论中辩手看不到自己之前的旧发言
   cache: false         # 可选：启用进程内 LLM 响应缓存（线程安全 LRU，默认 128 条）
+  # 可选：每次 run 的默认执行预算（每个 run 重新计数；run 时传 budget= 可覆盖）
+  # budget:
+  #   max_calls: 50          # 单次 run 最多调用 agent 的次数
+  #   max_tokens: 200000     # 单次 run 的 token 上限（LLM usage 计）
+  #   max_cost: 0.5          # 成本上限（需配合 pricer 使用，见 BudgetManager）
+  #   max_seconds: 300       # 单次 run 的墙钟时间上限（等同 run_timeout）
 
 agents:
   - name: researcher

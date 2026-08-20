@@ -12,6 +12,7 @@ __version__ = "1.0.1"
 
 from . import strategies
 from .agents import Agent, AgentFactory, ResponseCache, chat_completion
+from .cache import request_fingerprint
 from .config import build_coordinator, load_config
 from .context import ContextPolicy, build_context, truncate
 from .coordinator import AgentCoordinator, DeepseekAdapter
@@ -29,6 +30,7 @@ from .exceptions import (
 from .history import RunHistory
 from .memory import MessageStore
 from .observability import RunRegistry, Span, Task, Trace
+from .runtime import BudgetManager
 from .sessions import SessionManager
 
 __all__ = [
@@ -38,6 +40,7 @@ __all__ = [
     "AgentFactory",
     "AgentNotFound",
     "BudgetExceeded",
+    "BudgetManager",
     "ContextPolicy",
     "DSMAError",
     "DeepseekAdapter",
@@ -58,6 +61,7 @@ __all__ = [
     "build_context",
     "chat_completion",
     "load_config",
+    "request_fingerprint",
     "truncate",
     "strategies",
     "__version__",

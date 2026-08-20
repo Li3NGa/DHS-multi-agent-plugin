@@ -25,8 +25,17 @@ from .context import build_context, truncate
 from .exceptions import AgentNotFound, BudgetExceeded, RunTimeout, StrategyError
 from .observability import Span, current_trace, note_agent_call
 from .observability import Task as TraceTask
-from .runtime import clamp_timeout, run_deadline
+from .runtime import clamp_timeout, current_budget, run_deadline
 from .runtime.executor import shared_executor
+
+
+def _usage(agent) -> Dict[str, int]:
+    return dict(getattr(agent, "total_usage", None) or {})
+
+
+def _usage_delta(agent, before: Dict[str, int]) -> Dict[str, int]:
+    after = _usage(agent)
+    return {key: after.get(key, 0) - before.get(key, 0) for key in after}
 
 
 def _policy(coord):
@@ -47,15 +56,20 @@ def _note_call(agent, trace, status: str, seconds: float, error: Optional[str] =
                             duration_ms=seconds * 1000.0, error=error))
 
 
-def _run_agent_once(agent, message, context=None, trace=None, timed_out=None):
+def _run_agent_once(agent, message, context=None, trace=None, timed_out=None, budget=None):
     """Inline agent call with health/span recording.
 
     ``timed_out`` lets a caller that stopped waiting tell the still-running
     worker to skip recording (the timeout is noted by the caller instead).
     BudgetExceeded is never converted to an error dict: it must abort the
-    whole run, not be retried by the next strategy step.
+    whole run, not be retried by the next strategy step. Every agent call
+    goes through here, so the run budget is reserved/settled at this single
+    choke point (token usage is read off the agent's cumulative counters).
     """
     active = trace if trace is not None else current_trace()
+    if budget is not None:
+        budget.reserve()
+    usage_before = _usage(agent)
     start = time.perf_counter()
     status = "ok"
     error = None
@@ -70,6 +84,8 @@ def _run_agent_once(agent, message, context=None, trace=None, timed_out=None):
     finally:
         if timed_out is None or not timed_out.is_set():
             _note_call(agent, active, status, time.perf_counter() - start, error)
+        if budget is not None:
+            budget.settle(_usage_delta(agent, usage_before))
 
 
 def _call_agent(agent, message, context=None, timeout=None, trace=None):
@@ -88,18 +104,19 @@ def _call_agent(agent, message, context=None, timeout=None, trace=None):
     a spent budget raises RunTimeout instead of dispatching new work.
     """
     active = trace if trace is not None else current_trace()
+    budget = current_budget()
     run_dl = run_deadline()
     timeout = clamp_timeout(timeout)
     if timeout is None:
-        return _run_agent_once(agent, message, context, trace)
+        return _run_agent_once(agent, message, context, trace, budget=budget)
     # decide *before* waiting whether the run deadline or the per-call
     # timeout ends the wait: comparing clocks after an early-returning
     # wait() is racy on coarse-grained timers (Windows)
     run_binds = run_dl is not None and run_dl - time.monotonic() <= timeout
     timed_out = threading.Event()
     # the worker thread cannot see this thread's contextvar, so the trace
-    # captured here is passed down explicitly
-    future = shared_executor().submit(_run_agent_once, agent, message, context, active, timed_out)
+    # and budget captured here are passed down explicitly
+    future = shared_executor().submit(_run_agent_once, agent, message, context, active, timed_out, budget)
     try:
         return future.result(timeout=max(0.0, timeout))
     except FuturesTimeoutError:
@@ -132,13 +149,14 @@ def _parallel(
     timeout = clamp_timeout(timeout)
     targets = agents if agents is not None else coord.agents
     trace = current_trace()
+    budget = current_budget()
     results: Dict[str, Any] = {}
     pool = shared_executor()
     entries = []
     for agent in targets:
         ctx = contexts.get(agent.name, context) if contexts is not None else context
         timed_out = threading.Event()
-        future = pool.submit(_run_agent_once, agent, message, ctx, trace, timed_out)
+        future = pool.submit(_run_agent_once, agent, message, ctx, trace, timed_out, budget)
         entries.append((future, agent, timed_out))
 
     deadline = time.monotonic() + timeout if timeout is not None else None
@@ -411,12 +429,15 @@ def run_supervisor(
     # 2) execute the plan as a DAG on the shared bounded executor.
     # run_task already runs on a pool thread, so it must call the agent
     # inline (_run_agent_once) instead of submitting another pool job;
-    # the scheduler's per-task deadline covers the timeout.
+    # the scheduler's per-task deadline covers the timeout. The budget is
+    # captured here because pool threads cannot see this thread's contextvar.
+    budget = current_budget()
+
     def run_task(task):
         agent = coord.get_agent(task.agent) if task.agent else None
         if agent is None:
             return {"error": f"agent '{task.agent}' not registered"}
-        return _run_agent_once(agent, task.description, None, trace)
+        return _run_agent_once(agent, task.description, None, trace, budget=budget)
 
     def on_event(task, result):
         if trace is not None:

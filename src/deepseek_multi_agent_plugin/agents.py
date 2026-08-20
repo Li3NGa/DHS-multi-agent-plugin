@@ -21,11 +21,12 @@ import random
 import subprocess
 import time
 from threading import Lock
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence
 from urllib import error as urlerror
 from urllib import request
 
 from .cache import ResponseCache, request_fingerprint
+from .exceptions import AgentError, BudgetExceeded
 from .memory import MessageStore
 
 # --------------------------------------------------------------------------
@@ -372,6 +373,65 @@ class Agent:
         return f"Agent(name={self.name!r}, provider={self.provider!r}, model={self.model!r})"
 
 
+class FallbackAgent(Agent):
+    """Agent backed by a chain of agents; the first one that answers wins.
+
+    A backend that raises (provider error, connection failure) or returns
+    an error dict hands over to the next backend. When every backend fails
+    the last error propagates so the executor records the failure as
+    usual. Chaining two provider agents (e.g. deepseek -> openai) gives
+    provider fallback; each backend keeps its own retry/backoff policy.
+
+    Usage and cache hits of the winning backend are aggregated onto this
+    agent because budgets and run summaries read the counters of the
+    *registered* agent, not the backends'.
+    """
+
+    def __init__(self, name: str, backends: Sequence[Agent], role: Optional[str] = None):
+        backends = list(backends)
+        if not backends:
+            raise ValueError("fallback agent needs at least one backend agent")
+        super().__init__(name, role=role)
+        self.backends = backends
+        self.capabilities = as_capabilities(
+            cap for backend in backends for cap in backend.capabilities
+        )
+
+    def handle(self, message: Any, context: Optional[List[Dict[str, str]]] = None) -> Any:
+        last_error: Any = None
+        for backend in self.backends:
+            usage_before = dict(backend.total_usage)
+            hits_before = backend.cache_hits
+            try:
+                result = backend.handle(message, context)
+            except BudgetExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 - try the next backend
+                last_error = exc
+                continue
+            self._absorb_usage(backend, usage_before, hits_before)
+            if isinstance(result, dict) and "error" in result:
+                last_error = result["error"]
+                continue
+            return result
+        raise AgentError(
+            f"agent '{self.name}': all {len(self.backends)} backends failed "
+            f"(last error: {last_error})"
+        )
+
+    def _absorb_usage(self, backend: Agent, usage_before: Dict[str, int], hits_before: int) -> None:
+        for key, value in backend.total_usage.items():
+            delta = (value or 0) - (usage_before.get(key, 0) or 0)
+            if delta:
+                self._add_usage({key: delta})
+        self.cache_hits += backend.cache_hits - hits_before
+
+    def describe(self) -> Dict[str, Any]:
+        out = super().describe()
+        out["backends"] = [b.name for b in self.backends]
+        return out
+
+
 # --------------------------------------------------------------------------
 # Factory
 # --------------------------------------------------------------------------
@@ -389,6 +449,8 @@ class AgentFactory:
       API. api_key kwarg or the matching environment variable is required
       at call time.
     - custom: user-supplied callable via the handler kwarg.
+    - fallback: chain of existing Agent objects via the backends kwarg
+      (list, tried in order until one succeeds).
     - cli: external command-line agent. Kwargs command (required), args
       (default []), timeout (default 300 seconds), cwd (optional working
       directory) and encoding (default "utf-8"). The message is appended
@@ -398,6 +460,11 @@ class AgentFactory:
     @staticmethod
     def create_agent(kind: str, name: str, **kwargs: Any) -> Agent:
         kind = (kind or "").lower()
+        if kind == "fallback":
+            backends = kwargs.get("backends")
+            if not backends:
+                raise ValueError("fallback agent requires 'backends' kwarg (a list of Agent)")
+            return FallbackAgent(name, backends, role=kwargs.get("role"))
         if kind in ("deepseek", "openai"):
             return Agent(
                 name,

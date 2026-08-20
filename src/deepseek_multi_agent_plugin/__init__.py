@@ -11,7 +11,7 @@ any other MCP-capable agent host.
 __version__ = "1.0.1"
 
 from . import strategies
-from .agents import Agent, AgentFactory, ResponseCache, chat_completion
+from .agents import Agent, AgentFactory, FallbackAgent, ResponseCache, chat_completion
 from .cache import request_fingerprint
 from .config import build_coordinator, load_config
 from .context import ContextPolicy, build_context, truncate
@@ -44,6 +44,7 @@ __all__ = [
     "ContextPolicy",
     "DSMAError",
     "DeepseekAdapter",
+    "FallbackAgent",
     "MessageStore",
     "PlanError",
     "ProviderError",

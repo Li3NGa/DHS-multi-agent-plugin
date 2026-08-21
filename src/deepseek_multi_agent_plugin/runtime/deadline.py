@@ -60,3 +60,16 @@ def clamp_timeout(timeout: Optional[float]) -> Optional[float]:
     if remaining <= 0:
         raise RunTimeout("run deadline exceeded")
     return remaining if timeout is None else min(timeout, remaining)
+
+
+def run_deadline_expired() -> bool:
+    """Pollable check: has the run-level deadline already passed?
+
+    The scheduler relies on this instead of trusting ``future.cancel()`` (which
+    cannot stop an already-running Python thread) and instead of a watch-thread
+    that could be starved. Returns ``False`` when no run deadline is active.
+    """
+    deadline = _deadline.get()
+    if deadline is None:
+        return False
+    return deadline <= time.monotonic()

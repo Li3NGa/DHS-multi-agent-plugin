@@ -4,9 +4,12 @@ import time
 
 import pytest
 
-from deepseek_multi_agent_plugin.exceptions import BudgetExceeded, PlanError
+from deepseek_multi_agent_plugin.exceptions import BudgetExceeded, PlanError, RunTimeout
 from deepseek_multi_agent_plugin.runtime import (
+    CancellationToken,
+    RunResult,
     Task,
+    TaskContext,
     TaskPlan,
     TaskResult,
     TaskScheduler,
@@ -208,3 +211,256 @@ def test_max_concurrency_bounds_inflight_tasks():
 def test_empty_plan_executes_to_empty_results():
     scheduler = TaskScheduler(lambda task: "ok")
     assert scheduler.execute(TaskPlan([])) == {}
+
+
+# ------------------------------------------------- P0: timeouts & cancellation
+def test_cancellation_token_parent_chain():
+    """Run-level token cancels all children; a child cancel stays local."""
+    parent = CancellationToken()
+    child = CancellationToken(parent=parent)
+    assert not child.is_cancelled()
+    parent.cancel("run deadline exceeded")
+    assert child.is_cancelled()
+    assert child.reason() == "run deadline exceeded"
+
+    parent2 = CancellationToken()
+    child2 = CancellationToken(parent=parent2)
+    child2.cancel("task deadline exceeded")
+    assert child2.is_cancelled()
+    assert not parent2.is_cancelled()  # task-local cancel never leaks upward
+
+
+def test_task_context_fields():
+    token = CancellationToken()
+    ctx = TaskContext(task_id="t", cancellation=token, deadline=time.monotonic() + 1.0)
+    assert ctx.task_id == "t"
+    assert ctx.cancellation is token
+    assert ctx.deadline is not None and ctx.deadline > time.monotonic()
+    assert 0.0 < ctx.remaining() <= 1.0
+    assert not ctx.is_expired()
+
+
+def test_run_task_context_injection():
+    """Two-arg run_task receives TaskContext (task_id / cancellation / deadline)."""
+    box = {}
+
+    def run_task(task, ctx):
+        box["task_id"] = ctx.task_id
+        box["cancellation"] = ctx.cancellation
+        box["deadline"] = ctx.deadline
+        return "ok"
+
+    scheduler = TaskScheduler(run_task, default_timeout=5.0)
+    results = scheduler.execute(TaskPlan([Task(id="x1", description="d")]))
+    assert results["x1"].status is TaskStatus.SUCCESS
+    assert box["task_id"] == "x1"
+    assert box["cancellation"] is not None and not box["cancellation"].is_cancelled()
+    assert box["deadline"] is not None  # task deadline derived from default_timeout
+
+
+def test_task_timeout():
+    """Task deadline (Task.timeout) expiry marks TIMEOUT and requests cancel."""
+    seen = {}
+
+    def run_task(task, ctx):
+        seen["token"] = ctx.cancellation
+        for _ in range(100):
+            if ctx.cancellation.is_cancelled():
+                return "stopped-early"
+            time.sleep(0.01)
+        return "late"
+
+    tasks = [Task(id="slow", description="t", timeout=0.05)]
+    scheduler = TaskScheduler(run_task)
+    start = time.monotonic()
+    results = scheduler.execute(TaskPlan(tasks))
+    elapsed = time.monotonic() - start
+
+    assert results["slow"].status is TaskStatus.TIMEOUT
+    assert elapsed < 1.0
+    # the scheduler delivered a cooperative cancellation request even
+    # though the worker thread itself cannot be killed
+    assert seen["token"].is_cancelled()
+
+
+def test_run_timeout():
+    """Run deadline expiry is reported explicitly by execute_run()."""
+    def run_task(task):
+        time.sleep(0.5)
+        return "late"
+
+    plan = TaskPlan([Task(id="a", description="x"), Task(id="b", description="y")])
+    scheduler = TaskScheduler(run_task, deadline=time.monotonic() + 0.1)
+    run = scheduler.execute_run(plan)
+
+    assert isinstance(run, RunResult)
+    assert run.status == "timeout"
+    assert run.timed_out is True
+    assert set(run.results) == {"a", "b"}
+    # every task ends in a terminal state — none is left dangling
+    assert all(
+        r.status in (TaskStatus.TIMEOUT, TaskStatus.CANCELLED)
+        for r in run.results.values()
+    )
+
+
+def test_task_cancellation():
+    """A running task observes its CancellationToken and exits cooperatively."""
+    exited = threading.Event()
+
+    def run_task(task, ctx):
+        for _ in range(500):
+            if ctx.cancellation.is_cancelled():
+                exited.set()
+                return "stopped"
+            time.sleep(0.01)
+        return "late"
+
+    tasks = [Task(id="c1", description="t", timeout=0.08)]
+    scheduler = TaskScheduler(run_task)
+    results = scheduler.execute(TaskPlan(tasks))
+
+    assert results["c1"].status is TaskStatus.TIMEOUT
+    # the thread really exited via cooperation (not killed, asked + obeyed)
+    assert exited.wait(timeout=2.0)
+
+
+def test_run_cancellation():
+    """Run deadline requests cancellation of all running tasks."""
+    seen_tokens = []
+    lock = threading.Lock()
+
+    def run_task(task, ctx):
+        with lock:
+            seen_tokens.append(ctx.cancellation)
+        for _ in range(500):
+            if ctx.cancellation.is_cancelled():
+                return "stopped"
+            time.sleep(0.01)
+        return "late"
+
+    plan = TaskPlan([Task(id=f"t{i}", description="x") for i in range(3)])
+    scheduler = TaskScheduler(run_task, deadline=time.monotonic() + 0.12)
+    run = scheduler.execute_run(plan)
+
+    assert run.status == "timeout"
+    assert len(seen_tokens) == 3
+    # every running task's token carries the run-level cancel request
+    assert all(t.is_cancelled() for t in seen_tokens)
+
+
+def test_pending_tasks_cancelled():
+    """Tasks never started when the run deadline hits are CANCELLED."""
+    def run_task(task):
+        time.sleep(0.3)
+        return "late"
+
+    plan = TaskPlan([
+        Task(id="first", description="x"),
+        Task(id="second", description="y"),
+        Task(id="third", description="z"),
+    ])
+    scheduler = TaskScheduler(run_task, max_concurrency=1, deadline=time.monotonic() + 0.1)
+    run = scheduler.execute_run(plan)
+
+    assert run.status == "timeout"
+    assert run.results["first"].status is TaskStatus.TIMEOUT
+    assert run.results["second"].status is TaskStatus.CANCELLED
+    assert run.results["third"].status is TaskStatus.CANCELLED
+
+
+def test_running_tasks_cancel_requested():
+    """On run deadline every *running* task receives a cancellation request."""
+    token_box = {}
+
+    def run_task(task, ctx):
+        token_box[task.id] = ctx.cancellation
+        time.sleep(0.5)  # deliberately ignores the token (worst case)
+        return "late"
+
+    plan = TaskPlan([Task(id="r1", description="x"), Task(id="r2", description="y")])
+    scheduler = TaskScheduler(run_task, max_concurrency=1, deadline=time.monotonic() + 0.1)
+    run = scheduler.execute_run(plan)
+
+    assert run.status == "timeout"
+    assert "r1" in token_box  # r1 really was running
+    assert token_box["r1"].is_cancelled()  # and got the cancel request
+    assert run.results["r2"].status is TaskStatus.CANCELLED  # never started
+
+
+def test_deadline_does_not_loop_forever():
+    """THE regression test: a task sleeps far past the run deadline; the
+    scheduler must still return promptly (no infinite loop, no unbounded join)."""
+    def run_task(task):
+        time.sleep(2.5)
+        return "late"
+
+    plan = TaskPlan([Task(id="sleepy", description="x")])
+    scheduler = TaskScheduler(run_task, deadline=time.monotonic() + 0.15)
+    start = time.monotonic()
+    run = scheduler.execute_run(plan)
+    elapsed = time.monotonic() - start
+
+    assert run.status == "timeout"
+    assert run.results["sleepy"].status in (TaskStatus.TIMEOUT, TaskStatus.CANCELLED)
+    assert elapsed < 1.5  # bounded — far below the task's own 2.5s sleep
+
+
+def test_execute_still_raises_run_timeout():
+    """Legacy execute() keeps raising RunTimeout on run deadline breach."""
+    plan = TaskPlan([Task(id="a", description="x"), Task(id="b", description="y")])
+    scheduler = TaskScheduler(lambda task: (time.sleep(0.3), "late")[1],
+                              deadline=time.monotonic() + 0.1)
+    with pytest.raises(RunTimeout):
+        scheduler.execute(plan)
+
+
+def test_dependency_blocked_after_failure():
+    """Dependents of a failed task end SKIPPED; independent siblings still run."""
+    def run_task(task):
+        if task.id == "a":
+            raise RuntimeError("boom")
+        return f"{task.id}-ok"
+
+    plan = TaskPlan([
+        Task(id="a", description="x"),
+        Task(id="b", description="y", depends_on=["a"]),
+        Task(id="c", description="z", depends_on=["b"]),
+        Task(id="d", description="w"),
+    ])
+    scheduler = TaskScheduler(run_task)
+    run = scheduler.execute_run(plan)
+
+    assert run.status == "failed"
+    assert run.results["a"].status is TaskStatus.FAILED
+    assert run.results["b"].status is TaskStatus.SKIPPED
+    assert run.results["c"].status is TaskStatus.SKIPPED
+    assert run.results["d"].status is TaskStatus.SUCCESS
+
+
+def test_concurrency_limit_preserved():
+    """max_concurrency stays a hard ceiling with the new cancellation path."""
+    inflight = []
+    peak = []
+    lock = threading.Lock()
+
+    def run_task(task):
+        with lock:
+            inflight.append(task.id)
+            peak.append(len(inflight))
+        time.sleep(0.02)
+        with lock:
+            inflight.remove(task.id)
+        return "ok"
+
+    edges = [(f"t{i}", []) for i in range(6)]
+    plan, scheduler = _plan(edges, run_task, max_concurrency=2)
+    run = scheduler.execute_run(plan)
+    assert len(run.results) == 6
+    assert all(r.status is TaskStatus.SUCCESS for r in run.results.values())
+    assert max(peak) <= 2
+
+
+def test_run_result_dict_shape():
+    run = RunResult("timeout", {}, "run deadline exceeded")
+    assert run.as_dict() == {"status": "timeout", "reason": "run deadline exceeded", "results": {}}

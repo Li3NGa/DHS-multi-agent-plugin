@@ -5,12 +5,16 @@ ThreadPoolExecutor, so concurrency has a hard ceiling no matter how many
 coordinators, sessions or strategies are active. The ceiling defaults to
 16 and can be overridden with ``DSMA_MAX_CONCURRENCY``.
 
-Python threads cannot be killed, so a timed-out call keeps occupying its
-worker until its own I/O timeout fires; the pool size is the safety net
-that keeps thread counts from exploding in the meantime.
+Python threads cannot be killed. A timed-out or cancelled call therefore
+keeps occupying its worker until it ends on its own — either it observes
+its ``CancellationToken`` at a cooperative checkpoint (see
+``context.py``), or its provider / HTTP timeout fires. ``Future.cancel()``
+only prevents a future that has not started yet; it never stops a
+running thread. The pool size is the safety net that keeps thread counts
+bounded in the meantime.
 
-To keep slow workers from making the queue grow without bound behind them,
-the pool is wrapped in a counting gate: ``submit()`` waits at most
+To keep slow workers from making the queue grow without bound behind
+them, the pool is wrapped in a counting gate: ``submit()`` waits at most
 ``DSMA_POOL_SLOT_TIMEOUT`` (default 1s) for a free worker slot and then
 fails fast with :class:`PoolSaturated`. Callers treat saturation like a
 timeout instead of parking an unbounded backlog in the executor queue.

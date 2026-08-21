@@ -5,26 +5,38 @@ task plans as a DAG: independent tasks run in parallel, dependent tasks
 wait for their dependencies, and failures cascade as SKIPPED. Run-level
 concerns (deadline, execution budget) propagate through contextvars.
 """
+from ..context import CancellationToken, CancelledError, TaskContext
 from .budget import BudgetManager, as_budget, current_budget, end_run_budget, start_run_budget
-from .deadline import clamp_timeout, end_run_deadline, run_deadline, start_run_deadline
+from .deadline import (
+    clamp_timeout,
+    end_run_deadline,
+    run_deadline,
+    run_deadline_expired,
+    start_run_deadline,
+)
 from .dependency import topological_order
 from .executor import shared_executor, shutdown_executor
-from .scheduler import TaskScheduler
+from .scheduler import RunResult, TaskScheduler
 from .task import Task, TaskPlan, TaskResult, TaskStatus
 
 __all__ = [
     "BudgetManager",
+    "CancellationToken",
+    "CancelledError",
     "Task",
+    "TaskContext",
     "TaskPlan",
     "TaskResult",
     "TaskStatus",
     "TaskScheduler",
+    "RunResult",
     "as_budget",
     "clamp_timeout",
     "current_budget",
     "end_run_budget",
     "end_run_deadline",
     "run_deadline",
+    "run_deadline_expired",
     "shared_executor",
     "shutdown_executor",
     "start_run_budget",

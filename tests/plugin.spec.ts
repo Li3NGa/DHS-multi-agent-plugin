@@ -1,6 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import { apply, name } from '../src/index.js'
@@ -22,9 +22,9 @@ function fakeAgent(id: string, response: string): Agent {
         source: { kind: 'user' },
       })
       session.append('user/message', message, { surfaceOp: 'append' })
-      const assistant = createUserMessage({
+      const assistant = createAssistantMessage({
         content: [{ type: 'text', text: response }],
-        source: { kind: 'user' },
+        source: { provider: 'test', model: 'test' },
       })
       session.append('assistant/message', {
         message: assistant,

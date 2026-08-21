@@ -2,11 +2,15 @@
 import json
 import threading
 
+import pytest
+
 from deepseek_multi_agent_plugin import Agent, AgentCoordinator
 from deepseek_multi_agent_plugin.agents import as_capabilities
-from deepseek_multi_agent_plugin.runtime.task import TaskStatus
+from deepseek_multi_agent_plugin.exceptions import PlanValidationError
+from deepseek_multi_agent_plugin.runtime.task import Task, TaskPlan, TaskStatus
 from deepseek_multi_agent_plugin.supervisor import (
     WorkerRouter,
+    _validate_and_repair,
     format_task_results,
     parse_plan,
     plan_prompt,
@@ -55,23 +59,28 @@ def test_empty_plan_becomes_single_task():
     assert plan.tasks[0].description == "the original goal"
 
 
-def test_unknown_dependency_is_dropped_with_note():
+def test_unknown_dependency_fallback_drops_with_note():
+    # Dependency fallback is now opt-in (allow_dependency_fallback=True).
     text = json.dumps({"tasks": [
         {"id": "t1", "description": "a", "depends_on": ["ghost"]},
     ]})
-    plan, info = parse_plan(text, "goal", ["w1"], lambda n: None)
+    plan, info = parse_plan(text, "goal", ["w1"], lambda n: None,
+                            allow_dependency_fallback=True)
     assert plan.tasks[0].depends_on == []
     assert any("ghost" in note for note in info["notes"])
+    assert any("fallback" in note for note in info["notes"])
 
 
-def test_cyclic_dependencies_are_recovered():
+def test_cyclic_dependencies_fallback_recovers():
+    # Cycle recovery is also opt-in; by default a cycle raises.
     text = json.dumps({"tasks": [
         {"id": "t1", "description": "a", "depends_on": ["t2"]},
         {"id": "t2", "description": "b", "depends_on": ["t1"]},
     ]})
-    plan, info = parse_plan(text, "goal", ["w1"], lambda n: None)
+    plan, info = parse_plan(text, "goal", ["w1"], lambda n: None,
+                            allow_dependency_fallback=True)
     assert all(t.depends_on == [] for t in plan.tasks)
-    assert any("dependencies dropped" in note for note in info["notes"])
+    assert any("fallback" in note for note in info["notes"])
 
 
 def test_duplicate_ids_are_deduplicated():
@@ -172,3 +181,102 @@ def test_supervisor_strategy_respects_dependencies():
     order = []
     _dag_coordinator(order).run("goal", strategy="supervisor", timeout=10)
     assert order.index("step a") < order.index("step b")
+
+
+# --- Plan structural validation (TaskPlan.validate) ----------------------
+
+def test_duplicate_task_id():
+    with pytest.raises(PlanValidationError):
+        TaskPlan([Task("t", "a"), Task("t", "b")])
+
+
+def test_missing_dependency():
+    with pytest.raises(PlanValidationError):
+        TaskPlan([Task("t1", "a", depends_on=["ghost"])])
+
+
+def test_self_dependency():
+    with pytest.raises(PlanValidationError):
+        TaskPlan([Task("t1", "a", depends_on=["t1"])])
+
+
+def test_cycle_detection():
+    with pytest.raises(PlanValidationError):
+        TaskPlan([
+            Task("t1", "a", depends_on=["t2"]),
+            Task("t2", "b", depends_on=["t1"]),
+        ])
+
+
+def test_invalid_agent():
+    plan = TaskPlan([Task("t1", "a", agent="ghost")])
+    with pytest.raises(PlanValidationError):
+        plan.validate(known_agents={"w1", "w2"})
+
+
+def test_invalid_capability():
+    plan = TaskPlan([Task("t1", "a", required_capabilities=["research"])])
+    with pytest.raises(PlanValidationError):
+        plan.validate(known_agents={"w1"}, known_capabilities=set())
+
+
+def test_malformed_task_rejected():
+    with pytest.raises(PlanValidationError):
+        TaskPlan([Task("t1", "")])
+
+
+# --- Repair pipeline ------------------------------------------------------
+
+def test_repair_success():
+    # An unknown agent is re-routed to a real worker (semantically safe),
+    # so the plan validates after a single repair pass.
+    text = json.dumps({"tasks": [
+        {"id": "t1", "description": "a", "agent": "ghost"},
+        {"id": "t2", "description": "b", "agent": "w2"},
+    ]})
+    plan, info = parse_plan(text, "goal", ["w1", "w2"], lambda n: None)
+    assert plan.tasks[0].agent in {"w1", "w2"}   # reassigned, not "ghost"
+    assert plan.tasks[1].agent == "w2"           # valid agent untouched
+    assert any("ghost" in note for note in info["notes"])
+
+
+def test_repair_failure():
+    # A dependency cycle cannot be repaired without deleting edges, so the
+    # default strict mode raises PlanValidationError (the Run will FAIL).
+    text = json.dumps({"tasks": [
+        {"id": "t1", "description": "a", "depends_on": ["t2"]},
+        {"id": "t2", "description": "b", "depends_on": ["t1"]},
+    ]})
+    with pytest.raises(PlanValidationError):
+        parse_plan(text, "goal", ["w1"], lambda n: None)
+
+
+def test_no_silent_dependency_removal():
+    # Even after the repair attempts, a structurally-broken plan keeps its
+    # dependencies intact: the pipeline raises instead of clearing them.
+    tasks = [
+        Task("t1", "a", depends_on=["t2"]),
+        Task("t2", "b", depends_on=["t1"]),
+    ]
+    router = WorkerRouter(["w1"], lambda n: None)
+    with pytest.raises(PlanValidationError):
+        _validate_and_repair(
+            tasks, router, {"w1"}, set(), {"notes": []},
+            allow_dependency_fallback=False, max_repair_attempts=2,
+        )
+    # dependencies were never silently emptied to force validation through
+    assert tasks[0].depends_on == ["t2"]
+    assert tasks[1].depends_on == ["t1"]
+
+
+def test_repair_is_limited_in_attempts():
+    # Two workers so the unknown-agent repair succeeds; verify the repair
+    # note is recorded exactly as many times as attempts were needed (here
+    # it converges after the first repair pass, not an unbounded loop).
+    text = json.dumps({"tasks": [
+        {"id": "t", "description": "a", "agent": "ghost"},
+    ]})
+    plan, info = parse_plan(text, "goal", ["w1", "w2"], lambda n: None,
+                            max_repair_attempts=2)
+    assert plan.tasks[0].agent in {"w1", "w2"}
+    assert sum("ghost" in note for note in info["notes"]) == 1

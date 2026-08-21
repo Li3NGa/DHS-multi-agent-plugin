@@ -6,16 +6,27 @@ capability match > round-robin) and executed on the DAG scheduler.
 
 Free-form (non-JSON) supervisor output falls back to the legacy
 one-task-per-line format, so mock/script supervisors keep working.
-Plans whose dependencies form a cycle are recovered by dropping the
-edges rather than failing the whole run.
+
+Pipeline:  parse -> TaskPlan -> Validate -> Repair -> Validate -> Execute.
+
+Structural correctness is strict. When a plan fails validation we run a
+*limited* repair pass (default ``max_repair_attempts=2``) that only makes
+semantically-safe changes (re-route an unknown agent to a real worker,
+drop unsatisfiable capability requirements). It never clears
+``depends_on`` to paper over a real dependency problem, because that would
+silently change the task graph. If the plan is still invalid after repair
+the owning Run is marked FAILED (``PlanValidationError`` raised) — unless
+the caller opts into ``allow_dependency_fallback``, which re-enables the
+legacy "drop the offending edges and keep going" behaviour.
 """
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .agents import Agent, as_capabilities
-from .exceptions import PlanError
+from .exceptions import PlanValidationError
 from .runtime import Task, TaskPlan
+from .runtime.dependency import topological_order
 
 PLAN_INSTRUCTIONS = """请把上面的任务分解为一个 JSON 任务计划，格式如下（只输出 JSON，不要其他文字）：
 {
@@ -96,7 +107,7 @@ def _json_candidates(text: str) -> List[str]:
     return candidates
 
 
-def _tasks_from_json(raw: List[Dict[str, Any]], router: WorkerRouter) -> List[Task]:
+def _tasks_from_json(raw: List[Dict[str, Any]]) -> List[Task]:
     tasks: List[Task] = []
     used_ids: set[str] = set()
     for i, entry in enumerate(raw, 1):
@@ -111,36 +122,139 @@ def _tasks_from_json(raw: List[Dict[str, Any]], router: WorkerRouter) -> List[Ta
             str(dep).strip() for dep in (entry.get("depends_on") or [])
             if str(dep).strip()
         ]
+        # NOTE: the requested agent is kept verbatim so validation can detect
+        # an *unknown* agent. Concrete routing happens later (see
+        # _route_agents) once the plan has been validated / repaired.
         tasks.append(Task(
             id=task_id,
             description=description,
-            agent=router.assign(entry.get("agent"), entry.get("required_capabilities")),
+            agent=str(entry["agent"]).strip() if entry.get("agent") else None,
             depends_on=depends_on,
             required_capabilities=sorted(as_capabilities(entry.get("required_capabilities"))),
         ))
     return tasks
 
 
-def _tasks_from_lines(text: str, router: WorkerRouter, prompt: str) -> List[Task]:
+def _tasks_from_lines(text: str, prompt: str) -> List[Task]:
     lines = [ln.strip().lstrip("-*0123456789. ") for ln in str(text).splitlines()]
     lines = [ln for ln in lines if ln]
     if not lines:
-        return [Task(id="task_1", description=str(prompt), agent=router.assign(None, None))]
+        return [Task(id="task_1", description=str(prompt))]
     return [
-        Task(id=f"task_{i}", description=ln, agent=router.assign(None, None))
+        Task(id=f"task_{i}", description=ln)
         for i, ln in enumerate(lines, 1)
     ]
 
 
-def _resolve_dependencies(tasks: List[Task], notes: List[str]) -> None:
-    known = {t.id for t in tasks}
+def _route_agents(tasks: List[Task], router: WorkerRouter) -> None:
+    """Assign every task a concrete worker.
+
+    Idempotent for tasks whose agent is already a valid worker; assigns
+    round-robin for tasks left with no agent; re-routes an agent that was
+    repaired from an unknown name.
+    """
     for task in tasks:
-        unknown = [d for d in task.depends_on if d not in known]
-        if unknown:
-            notes.append(f"task '{task.id}': dropped unknown dependencies {unknown}")
-            task.depends_on = [d for d in task.depends_on if d in known]
-        if task.id in task.depends_on:
-            task.depends_on.remove(task.id)
+        task.agent = router.assign(task.agent, task.required_capabilities)
+
+
+def _repair_tasks(
+    tasks: List[Task],
+    router: WorkerRouter,
+    known_agents: set,
+    known_caps: set,
+    info: Dict[str, Any],
+) -> None:
+    """Attempt to fix a plan WITHOUT changing task semantics.
+
+    Safe repairs:
+      * an unknown / missing agent is re-routed to a concrete worker;
+      * capability requirements no worker satisfies are dropped (they are
+        unsatisfiable and only constrain routing, not a task's meaning).
+
+    NOT done here (they would alter dependencies / semantics): missing
+    dependencies, self-dependencies, cycles. Those need either another
+    repair pass (e.g. re-planning) or an explicit ``allow_dependency_fallback``.
+    """
+    for task in tasks:
+        before = task.agent
+        task.agent = router.assign(task.agent, task.required_capabilities)
+        if before is not None and before not in known_agents and task.agent != before:
+            info["notes"].append(
+                f"task '{task.id}': reassigned unknown agent '{before}' -> "
+                f"'{task.agent}'"
+            )
+        bad_caps = [c for c in task.required_capabilities if c not in known_caps]
+        if bad_caps:
+            task.required_capabilities = [
+                c for c in task.required_capabilities if c in known_caps
+            ]
+            info["notes"].append(
+                f"task '{task.id}': dropped unsupported capabilities {bad_caps}"
+            )
+
+
+def _apply_dependency_fallback(tasks: List[Task], info: Dict[str, Any]) -> None:
+    """Opt-in recovery: drop offending dependency edges (legacy behaviour).
+
+    Only reached when ``allow_dependency_fallback`` is True. This is the one
+    place allowed to mutate ``depends_on`` to resolve a structural problem,
+    and only because the caller explicitly opted in.
+    """
+    known_ids = {t.id for t in tasks}
+    for task in tasks:
+        kept = [d for d in task.depends_on if d in known_ids and d != task.id]
+        dropped = [d for d in task.depends_on if d not in kept]
+        if dropped:
+            info["notes"].append(
+                f"task '{task.id}': dropped dependencies {dropped} (fallback)"
+            )
+            task.depends_on = kept
+    # break remaining cycles by clearing all edges
+    ids = [t.id for t in tasks]
+    edges = {t.id: t.depends_on for t in tasks}
+    try:
+        topological_order(ids, edges)
+    except PlanValidationError:
+        for task in tasks:
+            if task.depends_on:
+                info["notes"].append(
+                    f"task '{task.id}': cleared dependency cycle (fallback)"
+                )
+                task.depends_on = []
+
+
+def _validate_and_repair(
+    tasks: List[Task],
+    router: WorkerRouter,
+    known_agents: set,
+    known_caps: set,
+    info: Dict[str, Any],
+    *,
+    allow_dependency_fallback: bool,
+    max_repair_attempts: int,
+) -> TaskPlan:
+    attempts = max(0, int(max_repair_attempts))
+    last_error: Optional[PlanValidationError] = None
+    for attempt in range(attempts + 1):
+        try:
+            plan = TaskPlan(tasks)
+            plan.validate(known_agents, known_caps)
+            _route_agents(tasks, router)
+            return plan
+        except PlanValidationError as exc:
+            last_error = exc
+            if attempt < attempts:  # limited repair, never on the final pass
+                _repair_tasks(tasks, router, known_agents, known_caps, info)
+    # Repair exhausted: fail the run (strict, default) or apply the opt-in
+    # dependency fallback.
+    if allow_dependency_fallback:
+        _apply_dependency_fallback(tasks, info)
+        plan = TaskPlan(tasks)
+        plan.validate(known_agents, known_caps)
+        _route_agents(tasks, router)
+        return plan
+    assert last_error is not None
+    raise last_error
 
 
 def parse_plan(
@@ -148,34 +262,60 @@ def parse_plan(
     prompt: str,
     workers: Sequence[str],
     agent_for: Callable[[str], Optional[Agent]],
+    *,
+    allow_dependency_fallback: bool = False,
+    max_repair_attempts: int = 2,
 ) -> Tuple[TaskPlan, Dict[str, Any]]:
-    """Parse supervisor output into a validated TaskPlan.
+    """Parse supervisor output into a validated, strictly-correct TaskPlan.
 
-    Returns (plan, info); info records the source format ("json" or
-    "lines") and any recovery notes (dropped edges, rejected ids).
+    Pipeline: parse -> TaskPlan -> Validate -> Repair -> Validate -> Execute.
+
+    The plan is checked for duplicate / empty id, missing or self
+    dependency, cycles, unknown agents, unsupported capabilities and missing
+    descriptions. If validation fails, a *limited* repair pass is attempted
+    (default ``max_repair_attempts=2``). Repair only performs changes that do
+    NOT alter task semantics (re-route an unknown agent to a real worker;
+    drop capability requirements no worker can satisfy). It never clears
+    ``depends_on`` to paper over a structural problem.
+
+    If the plan is still invalid after repair:
+      * when ``allow_dependency_fallback`` is True, the offending dependency
+        edges are dropped (the historical recovery behaviour) and the run
+        continues with a degraded plan;
+      * otherwise ``PlanValidationError`` is raised so the owning Run is
+        marked FAILED instead of executing a silently-degraded plan.
+
+    Returns (plan, info). ``info`` records the source format ("json"/"lines")
+    and any repair / fallback notes.
     """
     router = WorkerRouter(workers, agent_for)
+    known_agents = set(workers)
+    known_caps: set[str] = set()
+    for w in workers:
+        agent = agent_for(w)
+        if agent is not None:
+            known_caps |= agent.capabilities
+
     info: Dict[str, Any] = {"format": "lines", "notes": []}
     raw = _parse_json_tasks(text)
     if raw:
-        tasks = _tasks_from_json(raw, router)
+        tasks = _tasks_from_json(raw)
         if tasks:
             info["format"] = "json"
         else:
-            tasks = _tasks_from_lines(text, router, prompt)
+            tasks = _tasks_from_lines(text, prompt)
     else:
-        tasks = _tasks_from_lines(text, router, prompt)
+        tasks = _tasks_from_lines(text, prompt)
 
-    _resolve_dependencies(tasks, info["notes"])
-    try:
-        plan = TaskPlan(tasks)
-    except PlanError as exc:
-        # Cycles and other structural leftovers: keep the decomposition,
-        # drop the dependency edges.
-        info["notes"].append(f"dependencies dropped: {exc}")
-        for task in tasks:
-            task.depends_on = []
-        plan = TaskPlan(tasks)
+    plan = _validate_and_repair(
+        tasks,
+        router,
+        known_agents,
+        known_caps,
+        info,
+        allow_dependency_fallback=allow_dependency_fallback,
+        max_repair_attempts=max_repair_attempts,
+    )
     return plan, info
 
 

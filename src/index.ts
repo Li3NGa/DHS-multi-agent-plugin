@@ -23,9 +23,11 @@ export interface MultiAgentRunResult {
 
 export class MultiAgentService extends Service {
   private readonly runner = new AgentRunner()
+  private readonly context: Context
 
   constructor(ctx: Context) {
     super(ctx, 'multiAgent')
+    this.context = ctx
   }
 
   async run(options: MultiAgentRunOptions): Promise<MultiAgentRunResult> {
@@ -42,7 +44,7 @@ export class MultiAgentService extends Service {
     }))
 
     const results = await Promise.all(tasks.map(async (task) => {
-      const agent = this.ctx.agents.get(task.agent as Agent['id'])
+      const agent = this.context.agents.get(task.agent as Agent['id'])
       if (!agent) {
         throw new Error(`agent "${task.agent}" not found`)
       }

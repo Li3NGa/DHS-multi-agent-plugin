@@ -67,6 +67,13 @@ dsh-agent-loop，0.1.1-rc.2 线），经真实 `ctx.llm.registerAdapter` 注册�
 - I AbortSignal 取消 → 真实 turn 中止
 - Task1/Task2 隔离：同 agent 顺序两任务，task 2 的结果切片不包含
   task 1 的 assistant message（`session.events` seq 边界 = correlation）
+- **发布验证**（`smoke/dsh.bundle.spec.ts`）：真实 runtime 加载**构建产物**
+  `dist/dsh.bundle.js`（external 依赖经真实 node_modules 解析）、插件 fiber
+  卸载后 `ctx.multiAgent` 无残留、重载可用；**config 声明式 agent**
+  （DSH config → agent_loop.create → ctx.agents → 单任务/广播/Sequential/
+  Relay）全链路。
+- 边界：桌面/TUI 的 cordis.patch.yml 装载路径未在本机验证（无 ~/.dsh
+  桌面安装），见 `cordis.patch.yml.example`。
 
 ## 设计要点（真实 API 对齐）
 

@@ -15,7 +15,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.0-rc.7",
@@ -27,5 +28,10 @@
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

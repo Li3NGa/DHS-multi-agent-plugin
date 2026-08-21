@@ -1,0 +1,12 @@
+# Native multi-agent plugin for DeepSeek Harness (DSH).
+#
+# Install: dsh plugin add github:Li3NGa/DHS-multi-agent-plugin
+# The installer pnpm-installs the package (the prepare script builds dist/),
+# then this patch mounts the plugin into the profile bundle list.
+#
+# The Python engine is also usable standalone (pip install
+# deepseek-multi-agent-plugin) and mountable as an MCP server via
+# dsh/cordis.patch.yml.example.
+- insert:
+    - id: dhs-multi-agent
+      name: 'dhs-multi-agent'

@@ -49,11 +49,42 @@ ctx.multiAgent.runRelay({ prompt, steps })
 ctx.multiAgent.runBroadcast({ prompt, agents })
 ```
 
+## 真实 DSH 验证（smoke）
+
+`npm run test:smoke` 启动**真实 DeepSeek Harness 运行时**（`@deepseek-ai/cordis`
+Context + dsh-llm / dsh-session / dsh-system-prompt / dsh-tools / dsh-agent /
+dsh-agent-loop，0.1.1-rc.2 线），经真实 `ctx.llm.registerAdapter` 注册脚本化
+模型端点（DSH 官方测试同款模式，无需 API key），覆盖：
+
+- A 插件加载（cordis `ctx.plugin`，`inject: ['agents']`）
+- B `ctx.multiAgent` 经 `ctx.reflect.provide` 注册
+- C `ctx.agents` 解析真实 agent
+- D 单任务（真实 turn/session events）
+- E 广播（2 agent 并行）
+- F Sequential 结果传递
+- G Relay 草稿接力
+- H 任务超时 → 真实 `turn/end { aborted }`，run 不悬挂
+- I AbortSignal 取消 → 真实 turn 中止
+- Task1/Task2 隔离：同 agent 顺序两任务，task 2 的结果切片不包含
+  task 1 的 assistant message（`session.events` seq 边界 = correlation）
+
+## 设计要点（真实 API 对齐）
+
+- `followup(UserMessage): void` 无返回值；结果一律取自 `agent.session.events`
+  （`seq === index` 的 append-only 日志）。任务前记录 baseline、`whenIdle()`
+  后切片 —— 这是 task 级 correlation，杜绝读到前一个任务的回复。
+- 超时/取消走宿主机制：`agent.cancel({ kind: 'hook', reason })` 中止活跃
+  turn，`whenIdle()` 收敛；`interrupted: true` 的 assistant 前缀保留为部分
+  文本。无 sleep、无线程强杀。宿主能力边界：若 harness 在 cancel 后仍不
+  收敛，退化为有界 grace（max(5s, 2×timeout)）后按日志现状结算。
+- `defaultTimeoutMs` 默认 60s（`DEFAULT_TIMEOUT_MS`），任何任务都有超时上限。
+- 插件服务经 `ctx.reflect.provide('multiAgent', api)` 暴露，随 fiber 卸载。
+
 ## 已知边界
 
-- **DSH 端口未对实物验证**：`src/dsh.ts` 按 `ctx.agents` / `followup()` /
-  `whenIdle()` / 事件列表建模；拿到真实 DSH 类型定义后只需校正该文件与
-  `runner.ts` 的 `normalizeReply`。
+- **真实 LLM 端点未接入**：smoke 使用脚本化 adapter（无 API key 环境）；
+  `ctx.agents` / `followup` / `whenIdle` / session events / cancel 已在真实
+  harness 上验证（见上）。真实 provider 路径由 DSH 自身保证。
 - 超时与取消是协作式的：JS promise 无法杀死，任务立刻结算为
   failed/cancelled，底层调用继续浮动至自行结束（与 Python 基线一致）。
 - Relay 中途失败会取消后续步骤（调度器失败传播语义）；Python relay

@@ -89,15 +89,26 @@ function lastUserText(options: GenerateOptions): string {
   return 'echo'
 }
 
+/** One declarative (config-created) agent entry for the AgentLoop config. */
+export interface ConfigAgentEntry {
+  readonly id: string
+  readonly sessionId: string
+  readonly provider: string
+  readonly model: string
+}
+
 /** Boot the real harness with the scripted model route `mock`. */
-export async function bootHarness(adapter: ScriptedAdapter): Promise<Context> {
+export async function bootHarness(
+  adapter: ScriptedAdapter,
+  agents: readonly ConfigAgentEntry[] = [],
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentLoop, { agents: [] })
+  await ctx.plugin(AgentLoop, { agents: agents as never })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }

@@ -1,61 +1,71 @@
 /**
- * DSH API ports.
+ * DSH API ports — CALIBRATED against the real DeepSeek Harness packages
+ * (@deepseek-ai/dsh-agent 0.1.0-rc.6, dsh-session, dsh-llm, cordis 4.0.1;
+ * verified in dsh-native/smoke against the real runtime).
  *
- * ⚠ VERIFICATION REQUIRED: these structural interfaces model the DSH
- * (DeepSeek Harness) surface this plugin is allowed to use -
- * `ctx.agents`, `agent.followup()`, `agent.whenIdle()` and session
- * events. The real DSH type definitions were not available in this
- * repository when this module was written, so the ports below are the
- * single adjustment point: when the actual DSH package provides types,
- * align them here (and in `normalizeReply` in runner.ts) instead of
- * spreading DSH assumptions across the codebase.
+ * Only the surface this runtime uses is declared; the real Agent satisfies
+ * these structural types. Key real-API facts this port encodes:
  *
- * The runtime (Task / TaskGraph / Scheduler) deliberately depends only
- * on these ports and on plain functions, never on a concrete DSH client.
+ * - `followup(message: UserMessage): void` is synchronous and returns
+ *   nothing: the reply never comes back through followup. Results live in
+ *   `agent.session.events` (an append-only, seq-contiguous log where
+ *   `seq === index`), as `assistant/message` / `tool/call` / `tool/result`
+ *   / `turn/end` events scoped by turn and step.
+ * - Task correlation: recording `session.events.length` before followup()
+ *   and slicing after `whenIdle()` yields exactly this task's events — a
+ *   later task physically cannot read an earlier task's assistant message.
+ * - `whenIdle(): Promise<void>` resolves at whole-agent quiescence.
+ * - `cancel(cause: AgentCancelCause, options?)` is the host's real
+ *   cancellation mechanism; `{ kind: 'hook', reason }` is the plugin-facing
+ *   cause. A cancelled turn finalizes its streamed prefix as
+ *   `assistant/message` with `interrupted: true` and closes with
+ *   `turn/end { reason: { kind: 'aborted', ... } }`.
  */
+import { SessionId } from '@deepseek-ai/dsh-session'
+import type { AgentCancelCause, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 
-/**
- * A reply from an agent. The runner normalizes the shapes seen in the
- * DSH result channel into plain text; unknown shapes fall back to
- * `String(reply)` with the raw value preserved on the outcome.
- */
-export type DshAgentReply =
-  | string
-  | { readonly content?: unknown; readonly text?: unknown }
-  | readonly unknown[]
+export type { AgentCancelCause, SessionEvent, UserMessage }
 
-export interface DshAgent {
-  /** Stable identifier inside the harness. */
+/** The subset of the real DSH Agent this runtime drives. */
+export interface DshAgentHandle {
+  /** Stable identity (a DSH SessionId); tasks address agents by this id. */
   readonly id: string
 
-  /**
-   * Send a follow-up prompt to the agent and await its turn. Depending on
-   * the real DSH API this may resolve with the final text, a structured
-   * reply object, or a list of session events.
-   */
-  followup(prompt: string, options?: Record<string, unknown>): Promise<DshAgentReply>
+  /** Live event log; append-only with `seq === index`. */
+  readonly session: { readonly events: readonly SessionEvent[] }
 
-  /**
-   * Wait until the agent has drained its loop (pending tool calls etc.).
-   * Optional: when present the runner awaits it after followup() so tool
-   * results are included before the task is settled.
-   */
-  whenIdle?(): Promise<unknown>
+  /** Queue one ordinary follow-up turn (sole message of its own turn). */
+  followup(message: UserMessage): void
+
+  /** Resolve after the agent reaches quiescence (no active driver). */
+  whenIdle(): Promise<void>
+
+  /** Abort the active turn / clear queued work — the host cancel path. */
+  cancel(cause: AgentCancelCause, options?: unknown): void
 }
 
+/** Registry lookup over `ctx.agents` (AgentRegistry.get by session id). */
 export interface DshAgentLookup {
-  get(agentId: string): DshAgent | undefined
+  get(agentId: SessionId): DshAgentHandle | undefined
 }
 
-/** Cordis-style lifecycle events the plugin listens to (subset). */
-export interface DshLifecycle {
-  on(event: 'ready' | 'dispose', listener: () => void): unknown
+/** Resolve a plain-string task agentId through the registry. */
+export function lookupAgent(
+  registry: DshAgentLookup,
+  agentId: string,
+): DshAgentHandle | undefined {
+  return registry.get(SessionId(agentId))
 }
 
 /**
- * The plugin context DSH hands to `apply(ctx, config)`. Only the surface
- * this plugin actually uses is declared.
+ * The plugin context DSH hands to `apply(ctx, config)`: the cordis Context
+ * carries far more; only what this plugin uses is declared here.
+ * `reflect.provide(name, value)` is the sanctioned way a function plugin
+ * exposes a service (auto-unloaded with the plugin's fiber).
  */
-export interface DshContext extends DshLifecycle {
+export interface DshContext {
   readonly agents: DshAgentLookup
+  readonly reflect?: {
+    provide(name: string, value: unknown): unknown
+  }
 }

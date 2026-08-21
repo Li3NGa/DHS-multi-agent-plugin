@@ -13,8 +13,8 @@
  * Cordis wiring: function plugin with `inject: ['agents']`, mounted via
  * cordis.patch.yml pointing at dist/dsh.bundle.js.
  */
-import type { DshContext } from './dsh'
-import { AgentRunner, type AgentRunnerOptions, type TaskOutcome } from './runner'
+import type { DshAgentHandle, DshAgentLookup, DshContext, SessionEvent, UserMessage } from './dsh'
+import { AgentRunner, type AgentRunnerOptions, type TaskOutcome, type TaskRawEvents } from './runner'
 import { Scheduler, type SchedulerOptions, type SchedulerReport, type TaskExecute } from './scheduler'
 import { TaskGraph, GraphError } from './graph'
 import { Task, type TaskSpec, type TaskStatus, type TaskMetadata } from './task'
@@ -24,10 +24,14 @@ import { runBroadcast, type BroadcastOptions, type BroadcastReport } from './str
 
 export const inject = ['agents']
 
+/** Tasks without their own timeout get this ceiling (never hang a run). */
+export const DEFAULT_TIMEOUT_MS = 60_000
+
 export interface PluginConfig {
   /** Default max in-flight tasks for schedulers created via ctx.multiAgent. */
-  readonly concurrency?: number
-  readonly defaultTimeoutMs?: number
+  readonly concurrency?: number | undefined
+  /** Default per-task timeout; defaults to {@link DEFAULT_TIMEOUT_MS}. */
+  readonly defaultTimeoutMs?: number | undefined
 }
 
 export interface MultiAgentApi {
@@ -38,7 +42,9 @@ export interface MultiAgentApi {
 }
 
 export function apply(ctx: DshContext, config: PluginConfig = {}): void {
-  const runner = new AgentRunner(ctx, { defaultTimeoutMs: config.defaultTimeoutMs })
+  const runner = new AgentRunner(ctx, {
+    defaultTimeoutMs: config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+  })
   const execute: TaskExecute = (task, signal) => runner.run(task, signal)
 
   const api: MultiAgentApi = {
@@ -49,13 +55,9 @@ export function apply(ctx: DshContext, config: PluginConfig = {}): void {
     runRelay: (options) => runRelay(execute, { concurrency: config.concurrency, ...options }),
     runBroadcast: (options) => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
   }
-  ;(ctx as DshContext & { multiAgent?: MultiAgentApi }).multiAgent = api
-
-  if (typeof ctx.on === 'function') {
-    ctx.on('dispose', () => {
-      delete (ctx as DshContext & { multiAgent?: MultiAgentApi }).multiAgent
-    })
-  }
+  // cordis requires services to be provided, not assigned: this unloads
+  // automatically with the plugin's fiber
+  ctx.reflect?.provide('multiAgent', api)
 }
 
 export {
@@ -72,6 +74,7 @@ export type {
   AgentRunnerOptions,
   TaskExecute,
   TaskOutcome,
+  TaskRawEvents,
   TaskSpec,
   TaskStatus,
   TaskMetadata,
@@ -85,4 +88,8 @@ export type {
   BroadcastOptions,
   BroadcastReport,
   DshContext,
+  DshAgentHandle,
+  DshAgentLookup,
+  SessionEvent,
+  UserMessage,
 }

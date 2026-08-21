@@ -1,0 +1,42 @@
+name: DSH Native CI
+
+# TypeScript native runtime (dsh-native/) 的类型检查、测试与打包；
+# Python 侧由 ci.yml 覆盖，两套流水线互不影响。
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "dsh-native/**"
+      - ".github/workflows/dsh-native.yml"
+  pull_request:
+    paths:
+      - "dsh-native/**"
+      - ".github/workflows/dsh-native.yml"
+
+jobs:
+  native:
+    name: TypeScript (typecheck / test / build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dsh-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dsh-native/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build dsh.bundle
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-bundle
+          path: dsh-native/dist/dsh.bundle.js

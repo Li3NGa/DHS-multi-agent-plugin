@@ -1,0 +1,25 @@
+{
+  "name": "dsh-multi-agent-orchestration",
+  "version": "0.2.0",
+  "description": "DSH native multi-agent orchestration runtime: Task, TaskGraph, Scheduler, Sequential, Relay, Broadcast over ctx.agents",
+  "type": "module",
+  "main": "./dist/dsh.bundle.js",
+  "exports": {
+    ".": "./dist/dsh.bundle.js"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/dsh.bundle.js --sourcemap"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

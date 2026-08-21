@@ -27,10 +27,10 @@ function fakeAgent(id: string, response: string): Agent {
         source: { provider: 'test', model: 'test' },
       })
       session.append('assistant/message', {
+        turn: 0,
+        step: 0,
         message: assistant,
-        surfaceOp: 'append',
-        sourceEventSeqs: [],
-      })
+      }, { surfaceOp: 'append', sourceEventSeqs: [] })
     },
     steer: () => ({ outcome: Promise.resolve({ status: 'rejected' as const }) }),
     inject: () => {},

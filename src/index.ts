@@ -22,6 +22,8 @@ export interface MultiAgentRunResult {
 }
 
 export class MultiAgentService extends Service {
+  static inject = ['agents']
+
   private readonly runner = new AgentRunner()
   private readonly context: Context
 
@@ -56,7 +58,6 @@ export class MultiAgentService extends Service {
 }
 
 export const name = 'dhs-multi-agent'
-export const inject = ['agents']
 
 export function apply(ctx: Context) {
   ctx.plugin(MultiAgentService)

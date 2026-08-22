@@ -32,12 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # corepack must be enabled BEFORE setup-node: the action resolves
+      # `cache: pnpm` by invoking pnpm, which does not exist on the runner
+      # until the shim is installed (node ships corepack on ubuntu images)
+      - name: Enable pnpm
+        run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: pnpm
-      - name: Enable pnpm
-        run: corepack enable
       - name: Install workspace (frozen)
         run: pnpm install --frozen-lockfile
       - name: Typecheck

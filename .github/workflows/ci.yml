@@ -39,18 +39,26 @@ jobs:
         run: python -m pytest tests/ -q
 
   typecheck-build-test:
-    name: Native DSH TypeScript
+    # Transitional: the ROOT native plugin (src/index.ts, broadcast-only).
+    # The official Native Runtime signal is the dsh-native.yml workflow
+    # ("DSH Native Runtime CI (source of truth)"). This job retires when
+    # the root implementation migrates (docs/dsh-integration-plan.md;
+    # snapshot tag: dhs-root-native-final).
+    name: Native root plugin (transitional)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+      - name: Enable pnpm
+        run: corepack enable
       - name: Install TypeScript dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
       - name: Test
-        run: npm test
+        run: pnpm test
       - name: Build
-        run: npm run build
+        run: pnpm build

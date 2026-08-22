@@ -1,7 +1,11 @@
-name: DSH Native CI
+name: DSH Native Runtime CI (source of truth)
 
-# TypeScript native runtime (dsh-native/) 的类型检查、测试与打包；
-# Python 侧由 ci.yml 覆盖，两套流水线互不影响。
+# THE official Native Runtime signal for dsh-native/ (Task / TaskGraph /
+# Scheduler / AgentRunner / strategies), including the real-DSH-runtime
+# smoke suite (bundle artifact + config-created agents). The root native
+# plugin keeps a separate transitional job inside ci.yml
+# ("Native root plugin (transitional)") until the convergence migration
+# retires it; do not add another workflow claiming to be the native test.
 
 on:
   push:
@@ -15,8 +19,8 @@ on:
       - ".github/workflows/dsh-native.yml"
 
 jobs:
-  native:
-    name: TypeScript (typecheck / test / build)
+  native-runtime:
+    name: Native runtime (typecheck / test / smoke / build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,16 +30,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: dsh-native/package-lock.json
+          cache: pnpm
+          cache-dependency-path: dsh-native/pnpm-lock.yaml
+      - name: Enable pnpm
+        run: corepack enable
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Typecheck
-        run: npm run typecheck
-      - name: Test
-        run: npm test
-      - name: Build dsh.bundle
-        run: npm run build
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Real-runtime smoke (bundle + config-created agents)
+        run: pnpm test:smoke
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-bundle

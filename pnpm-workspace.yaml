@@ -27,8 +27,10 @@ minimumReleaseAgeExclude:
 # spawns a nested pnpm that is not guaranteed on PATH there.
 verifyDepsBeforeRun: false
 
-onlyBuiltDependencies:
-  - esbuild
-
+# pnpm 11 defaults to strictDepBuilds: every dependency that declares a
+# build script must be explicitly allowed or disallowed via allowBuilds,
+# otherwise install fails with ERR_PNPM_IGNORED_BUILDS. esbuild ships its
+# platform binaries through optionalDependencies, so its postinstall is
+# unnecessary: explicitly disallow it.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: false

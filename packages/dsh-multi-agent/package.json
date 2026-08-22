@@ -13,9 +13,9 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --configLoader runner",
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/dsh.bundle.js --sourcemap --external:@deepseek-ai/*",
-    "test:smoke": "pnpm run build && vitest run --config vitest.smoke.config.ts"
+    "test:smoke": "pnpm run build && vitest run --configLoader runner --config vitest.smoke.config.ts"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

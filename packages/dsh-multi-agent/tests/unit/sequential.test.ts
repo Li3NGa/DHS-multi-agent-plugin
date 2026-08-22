@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { runSequential } from '../src/strategies/sequential'
-import type { TaskExecute } from '../src/scheduler'
-import type { Task } from '../src/task'
+import { runSequential } from '../../src/strategies/sequential'
+import type { TaskExecute } from '../../src/scheduler'
+import type { Task } from '../../src/task'
 
 describe('runSequential', () => {
   it('A -> B -> C with each step receiving the previous result', async () => {

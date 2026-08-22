@@ -21,6 +21,6 @@
     "src",
     "tests",
     "vitest.config.ts",
-    "smoke"
+    "vitest.smoke.config.ts"
   ]
 }

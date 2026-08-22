@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/dsh.bundle.js --sourcemap --external:@deepseek-ai/*",
-    "test:smoke": "npm run build && vitest run --config vitest.smoke.config.ts"
+    "test:smoke": "pnpm run build && vitest run --config vitest.smoke.config.ts"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -30,5 +30,6 @@
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@11.22.0",
+  "private": true
 }

@@ -17,8 +17,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
-    "prepare": "tsc"
+    "build": "esbuild packages/dsh-multi-agent/src/index.ts --bundle --format=esm --outfile=dist/index.js --sourcemap --external:@deepseek-ai/*",
+    "prepare": "pnpm run build",
+    "test:smoke": "pnpm run build && pnpm --dir packages/dsh-multi-agent run test:smoke"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -29,7 +30,8 @@
   "devDependencies": {
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "esbuild": "^0.25.0"
   },
   "dsh": {
     "bundle": {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Task } from '../src/task'
+import { Task } from '../../src/task'
 
 describe('Task', () => {
   it('creates a task from a spec', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { runRelay, relayMessage } from '../src/strategies/relay'
-import type { TaskExecute } from '../src/scheduler'
-import type { Task } from '../src/task'
+import { runRelay, relayMessage } from '../../src/strategies/relay'
+import type { TaskExecute } from '../../src/scheduler'
+import type { Task } from '../../src/task'
 
 function outcome(task: Task, text: string) {
   return { taskId: task.id, status: 'completed' as const, text, error: undefined, durationMs: 1, raw: undefined }

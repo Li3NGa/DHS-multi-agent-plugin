@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GraphError, TaskGraph } from '../src/graph'
+import { GraphError, TaskGraph } from '../../src/graph'
 
 function complete(graph: TaskGraph, id: string): void {
   const task = graph.get(id)

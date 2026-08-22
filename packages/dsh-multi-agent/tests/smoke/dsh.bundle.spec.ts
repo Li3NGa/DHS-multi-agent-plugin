@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootHarness, ScriptedAdapter, type ConfigAgentEntry } from './support'
-import type { MultiAgentApi } from '../src/index'
+import type { MultiAgentApi } from '../../src/index'
 
 type BundleExports = {
   apply: (ctx: Context, config?: Record<string, unknown>) => void
@@ -32,7 +32,7 @@ type BundleExports = {
 
 // the BUILT artifact, as a host would import it; the runtime URL keeps TS
 // from trying to typecheck the generated bundle
-const bundleUrl = new URL('../dist/dsh.bundle.js', import.meta.url).href
+const bundleUrl = new URL('../../dist/dsh.bundle.js', import.meta.url).href
 const bundle = (await import(/* @vite-ignore */ bundleUrl)) as BundleExports
 
 const adapter = new ScriptedAdapter(['echo'], 'echo')
@@ -72,7 +72,7 @@ describe('full bundle on the real DSH runtime', () => {
   it('runs a single task through the bundle-mounted API', async () => {
     // agent created programmatically here; config-created agents below
     ctx.agentLoop.create(SessionId('b1'), { provider: 'mock', model: 'mock' })
-    const { TaskGraph } = await import('../src/graph')
+    const { TaskGraph } = await import('../../src/graph')
     const graph = new TaskGraph()
     graph.add({ id: 't', agentId: 'b1', prompt: 'bundle check', timeoutMs: 10_000 })
     const report = await multiAgentOf(ctx)!.scheduler().run(graph)
@@ -122,7 +122,7 @@ describe('config-created agents (DSH config -> agent_loop.create -> ctx.agents -
   })
 
   it('runs a single task on a config-created agent', async () => {
-    const { TaskGraph } = await import('../src/graph')
+    const { TaskGraph } = await import('../../src/graph')
     const graph = new TaskGraph()
     graph.add({ id: 'only', agentId: 'cw1', prompt: 'config agent task', timeoutMs: 10_000 })
     const report = await multiAgent.scheduler().run(graph)

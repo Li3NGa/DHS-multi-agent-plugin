@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { TaskGraph } from '../src/graph'
-import { Scheduler } from '../src/scheduler'
-import type { TaskOutcome } from '../src/runner'
-import type { Task } from '../src/task'
+import { TaskGraph } from '../../src/graph'
+import { Scheduler } from '../../src/scheduler'
+import type { TaskOutcome } from '../../src/runner'
+import type { Task } from '../../src/task'
 import { deferred, type Deferred } from './helpers'
 
 /** Execute fn that never settles until the test allows it. */

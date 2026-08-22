@@ -1,5 +1,13 @@
+packages:
+  - 'packages/*'
+
+# pnpm 11 settings (single home for the whole workspace). The release-age
+# policy would otherwise reject the young @deepseek-ai rc line; these are
+# the exact pinned versions verified on the real DSH runtime.
 minimumReleaseAgeExclude:
+  - '@deepseek-ai/cordis@4.0.1'
   - '@deepseek-ai/dsh-agent@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-agent-loop@0.1.1-rc.2'
   - '@deepseek-ai/dsh-attachment@0.1.1-rc.2'
   - '@deepseek-ai/dsh-brand@0.1.1-rc.2'
   - '@deepseek-ai/dsh-invariants@0.1.1-rc.2'
@@ -8,4 +16,19 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-session@0.1.1-rc.2'
   - '@deepseek-ai/dsh-system-prompt@0.1.1-rc.2'
   - '@deepseek-ai/dsh-timeout@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-tools@0.1.1-rc.2'
   - '@deepseek-ai/dsh-typert-protocol@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-code-runtime@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-session-persistence@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-settings@0.1.1-rc.2'
+  - '@deepseek-ai/dsh-user-approval@0.1.1-rc.2'
+
+# CI installs explicitly before running scripts; the pre-run deps check
+# spawns a nested pnpm that is not guaranteed on PATH there.
+verifyDepsBeforeRun: false
+
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: set this to true or false

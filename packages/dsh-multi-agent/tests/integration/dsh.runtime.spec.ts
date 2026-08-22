@@ -11,9 +11,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { apply, type MultiAgentApi } from '../src/index'
-import { TaskGraph } from '../src/graph'
-import { bootHarness, realAgent, ScriptedAdapter } from './support'
+import { apply, type MultiAgentApi } from '../../src/index'
+import { TaskGraph } from '../../src/graph'
+import { bootHarness, realAgent, ScriptedAdapter } from '../smoke/support'
 
 const adapter = new ScriptedAdapter(['echo'], 'echo')
 let ctx: Awaited<ReturnType<typeof bootHarness>>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { runBroadcast } from '../src/strategies/broadcast'
-import type { TaskExecute } from '../src/scheduler'
+import { runBroadcast } from '../../src/strategies/broadcast'
+import type { TaskExecute } from '../../src/scheduler'
 
 describe('runBroadcast', () => {
   it('asks every agent in parallel and reports in declaration order', async () => {

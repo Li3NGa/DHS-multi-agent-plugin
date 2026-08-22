@@ -1,6 +1,6 @@
-import type { TaskExecute } from '../src/scheduler'
-import type { TaskOutcome } from '../src/runner'
-import type { Task } from '../src/task'
+import type { TaskExecute } from '../../src/scheduler'
+import type { TaskOutcome } from '../../src/runner'
+import type { Task } from '../../src/task'
 
 export interface Deferred<T> {
   readonly promise: Promise<T>

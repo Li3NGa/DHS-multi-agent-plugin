@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentRunner, outcomeFromEvents } from '../src/runner'
-import { Task } from '../src/task'
-import type { DshAgentHandle, DshContext, UserMessage } from '../src/dsh'
+import { AgentRunner, outcomeFromEvents } from '../../src/runner'
+import { Task } from '../../src/task'
+import type { DshAgentHandle, DshContext, UserMessage } from '../../src/dsh'
 
 /**
  * Unit-level runner tests over fake agents that follow the REAL DSH API

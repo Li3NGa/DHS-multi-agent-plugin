@@ -216,3 +216,36 @@ partial text。策略层报告：`SequentialReport{steps, final, ok}`、
 维护规则：本文档 + `tests/unit/api-contract.test.ts` 共同构成冻结。
 对 Public API 的任何增删改（含默认值）= 破坏性变更，需升 minor/major
 并在此记录。
+
+## 13. Strategy Contract（Phase D 冻结增补）
+
+三种策略（Broadcast / Sequential / Relay）的报告统一实现公共信封
+`StrategyReport`（`src/strategies/contract.ts`）：
+
+```ts
+interface StrategyReport {
+  strategy: 'broadcast' | 'sequential' | 'relay'
+  status: 'success' | 'partial' | 'failed' | 'cancelled'
+  ok: boolean                    // === status 'success'
+  stopped: boolean               // 经 stop()/AbortSignal 终止（Scheduler 语义）
+  tasks: readonly StrategyTask[] // 每 task 一项，声明序；correlation = taskId
+  outputs: readonly string[]     // completed 文本，声明序
+  errors: readonly { taskId; error }[]
+  metadata: { taskCount; completed; failed; cancelled; timedOut }
+}
+```
+
+- `tasks[].status` 复用 TaskOutcomeStatus（无第二套结果模型）；策略专属
+  字段（steps/turns/responses/final/draft/joined）作为扩展保留，差异
+  只存在于策略内部——未来 Supervisor 只依赖本信封。
+- run 级 status 推导（冻结）：`stopped → 'cancelled'`；否则全 completed
+  → `'success'`；有 completed → `'partial'`；否则 `'failed'`。空输入为
+  `'success'`（与既有空报告 `ok: true` 行为一致）。
+- **错误分层**：TaskError = `tasks[].error`（agent 缺失 / timeout 前缀 /
+  依赖级联 `dependency 'x' ...` / execute 异常），永不吞掉；StrategyError
+  = 无新增异常类型——任务失败不抛出，中止即 `status 'cancelled' +
+  stopped`；RuntimeError = GraphError / TypeError（结构/参数错误）原样
+  传播。
+- **timeout / cancellation**：策略不自建任何定时器或取消机制，全部经
+  §5/§9/§10 的 Runtime 语义（signal 透传 Scheduler；timeout 由
+  AgentRunner 结算为 `failed` + `timeout:` 前缀错误）。

@@ -21,6 +21,14 @@ import { Task, type TaskSpec, type TaskStatus, type TaskMetadata } from './task'
 import { runSequential, type SequentialOptions, type SequentialReport, type SequentialStep } from './strategies/sequential'
 import { runRelay, type RelayOptions, type RelayReport } from './strategies/relay'
 import { runBroadcast, type BroadcastOptions, type BroadcastReport } from './strategies/broadcast'
+import type {
+  StrategyReport,
+  StrategyTask,
+  StrategyError,
+  StrategyMetadata,
+  StrategyKind,
+  StrategyRunStatus,
+} from './strategies/contract'
 
 export const inject = ['agents']
 
@@ -87,6 +95,12 @@ export type {
   RelayReport,
   BroadcastOptions,
   BroadcastReport,
+  StrategyReport,
+  StrategyTask,
+  StrategyError,
+  StrategyMetadata,
+  StrategyKind,
+  StrategyRunStatus,
   DshContext,
   DshAgentHandle,
   DshAgentLookup,

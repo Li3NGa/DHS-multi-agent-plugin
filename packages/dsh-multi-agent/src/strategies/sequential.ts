@@ -11,6 +11,7 @@
  */
 import { TaskGraph } from '../graph'
 import { Scheduler, type SchedulerOptions, type TaskExecute } from '../scheduler'
+import { strategyEnvelope, type StrategyReport } from './contract'
 import { Task, type TaskMetadata } from '../task'
 import type { TaskOutcome } from '../runner'
 
@@ -36,11 +37,10 @@ export interface SequentialStep {
   readonly metadata?: TaskMetadata
 }
 
-export interface SequentialReport {
+export interface SequentialReport extends StrategyReport {
   readonly steps: readonly SequentialStepResult[]
   /** Text of the last successful step, if any. */
   readonly final: string | undefined
-  readonly ok: boolean
 }
 
 export interface SequentialOptions extends SchedulerOptions {
@@ -52,7 +52,9 @@ export async function runSequential(
   steps: readonly SequentialStep[],
   options: SequentialOptions = {},
 ): Promise<SequentialReport> {
-  if (steps.length === 0) return { steps: [], final: undefined, ok: true }
+  if (steps.length === 0) {
+    return { steps: [], final: undefined, ...strategyEnvelope('sequential', false, []) }
+  }
 
   const graph = new TaskGraph()
   steps.forEach((step, index) => {
@@ -107,9 +109,16 @@ export async function runSequential(
     }
   })
   const lastSuccess = [...stepResults].reverse().find((step) => step.status === 'completed')
+  const tasks = stepResults.map((step) => ({
+    taskId: step.taskId,
+    agentId: step.agentId,
+    status: step.status,
+    text: step.text,
+    error: step.error,
+  }))
   return {
     steps: stepResults,
     final: lastSuccess?.text,
-    ok: report.ok,
+    ...strategyEnvelope('sequential', report.stopped, tasks),
   }
 }

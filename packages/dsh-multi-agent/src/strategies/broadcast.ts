@@ -8,6 +8,7 @@
  */
 import { TaskGraph } from '../graph'
 import { Scheduler, type SchedulerOptions, type TaskExecute } from '../scheduler'
+import { strategyEnvelope, type StrategyReport } from './contract'
 
 export interface BroadcastAgent {
   readonly agentId: string
@@ -28,11 +29,10 @@ export interface BroadcastEntry {
   readonly error: string | undefined
 }
 
-export interface BroadcastReport {
+export interface BroadcastReport extends StrategyReport {
   /** One entry per agent, in declaration order. */
   readonly responses: readonly BroadcastEntry[]
   readonly joined: string
-  readonly ok: boolean
 }
 
 export async function runBroadcast(
@@ -41,7 +41,7 @@ export async function runBroadcast(
 ): Promise<BroadcastReport> {
   const { prompt, agents, signal } = options
   if (agents.length === 0) {
-    return { responses: [], joined: '', ok: true }
+    return { responses: [], joined: '', ...strategyEnvelope('broadcast', false, []) }
   }
 
   const graph = new TaskGraph()
@@ -73,5 +73,16 @@ export async function runBroadcast(
     .map((entry) => entry.text)
     .filter((text): text is string => text !== undefined)
     .join('\n\n')
-  return { responses, joined, ok: report.ok }
+  const tasks = responses.map((entry) => ({
+    taskId: entry.taskId,
+    agentId: entry.agentId,
+    status: entry.status,
+    text: entry.text,
+    error: entry.error,
+  }))
+  return {
+    responses,
+    joined,
+    ...strategyEnvelope('broadcast', report.stopped, tasks),
+  }
 }

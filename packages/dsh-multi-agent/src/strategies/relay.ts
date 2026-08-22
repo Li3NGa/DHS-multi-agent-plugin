@@ -9,6 +9,7 @@
  */
 import { TaskGraph } from '../graph'
 import { Scheduler, type SchedulerOptions, type TaskExecute } from '../scheduler'
+import { strategyEnvelope, type StrategyReport } from './contract'
 import type { TaskOutcome } from '../runner'
 
 export interface RelayStep {
@@ -36,10 +37,9 @@ export interface RelayTurn {
   readonly durationMs: number
 }
 
-export interface RelayReport {
+export interface RelayReport extends StrategyReport {
   readonly draft: string
   readonly turns: readonly RelayTurn[]
-  readonly ok: boolean
 }
 
 export interface RelayOptions extends SchedulerOptions {
@@ -61,7 +61,9 @@ export async function runRelay(
   options: RelayOptions,
 ): Promise<RelayReport> {
   const { prompt, steps, signal } = options
-  if (steps.length === 0) return { draft: prompt, turns: [], ok: true }
+  if (steps.length === 0) {
+    return { draft: prompt, turns: [], ...strategyEnvelope('relay', false, []) }
+  }
 
   const graph = new TaskGraph()
   steps.forEach((step, index) => {
@@ -134,5 +136,16 @@ export async function runRelay(
     if (value === undefined) break
     draft = value
   }
-  return { draft, turns: turnList, ok: report.ok }
+  const tasks = turnList.map((turn) => ({
+    taskId: turn.taskId,
+    agentId: turn.agentId,
+    status: turn.status,
+    text: turn.output,
+    error: turn.error,
+  }))
+  return {
+    draft,
+    turns: turnList,
+    ...strategyEnvelope('relay', report.stopped, tasks),
+  }
 }

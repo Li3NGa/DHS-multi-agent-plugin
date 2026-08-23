@@ -24,10 +24,24 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentRunner } from '../src/runner'
 import type { TaskExecute } from '../src/scheduler'
 import { createSupervisor } from '../src/supervisor'
+import type { SupervisorRunResult } from '../src/supervisor'
 import { bootHarness, realAgent, ScriptedAdapter } from './support'
 
 const adapter = new ScriptedAdapter(['echo'], 'echo')
 let ctx: Awaited<ReturnType<typeof bootHarness>>
+
+function broadcastReport(result: SupervisorRunResult) {
+  if (result.report.strategy !== 'broadcast') throw new Error('expected broadcast report')
+  return result.report.report
+}
+function sequentialReport(result: SupervisorRunResult) {
+  if (result.report.strategy !== 'sequential') throw new Error('expected sequential report')
+  return result.report.report
+}
+function relayReport(result: SupervisorRunResult) {
+  if (result.report.strategy !== 'relay') throw new Error('expected relay report')
+  return result.report.report
+}
 
 beforeAll(async () => {
   ctx = await bootHarness(adapter)
@@ -59,9 +73,9 @@ describe('Supervisor V1 — real DSH integration', () => {
     })
     expect(result.status).toBe('completed')
     expect(result.report.strategy).toBe('broadcast')
-    expect(result.report.report.ok).toBe(true)
+    expect(broadcastReport(result).ok).toBe(true)
     // echo adapter: each real agent replies with the task prompt
-    expect(result.report.report.responses.map((entry) => entry.text)).toEqual([
+    expect(broadcastReport(result).responses.map((entry) => entry.text)).toEqual([
       'broadcast hello',
       'broadcast hello',
     ])
@@ -83,8 +97,8 @@ describe('Supervisor V1 — real DSH integration', () => {
     })
     expect(result.status).toBe('completed')
     expect(result.report.strategy).toBe('sequential')
-    expect(result.report.report.steps[0]?.text).toBe('first')
-    expect(result.report.report.steps[1]?.text).toBe('got: first')
+    expect(sequentialReport(result).steps[0]?.text).toBe('first')
+    expect(sequentialReport(result).steps[1]?.text).toBe('got: first')
   })
 
   it('relay run threads the draft through real turns', async () => {
@@ -100,6 +114,6 @@ describe('Supervisor V1 — real DSH integration', () => {
     })
     expect(result.status).toBe('completed')
     expect(result.report.strategy).toBe('relay')
-    expect(result.report.report.turns[0]?.output).toContain('start draft')
+    expect(relayReport(result).turns[0]?.output).toContain('start draft')
   })
 })

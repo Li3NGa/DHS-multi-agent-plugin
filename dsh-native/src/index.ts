@@ -126,3 +126,48 @@ export type {
   SupervisorDeps,
   SupervisorStrategyEntryPoints,
 } from './supervisor'
+
+// Phase E3 Native Planner layer (Planner V1 + Plan Validator + Agent Router
+// + Supervisor integration). Sits in front of the frozen Supervisor; reaches
+// the Runtime only through Supervisor.run.
+export {
+  PlannerError,
+  PlanParseError,
+  PlanValidationError,
+  PlanRoutingError,
+  PlanIntegrationError,
+  isPlannerError,
+  PlannerV1,
+  createPlanner,
+  parsePlanText,
+  PlanValidator,
+  createPlanValidator,
+  AgentRouter,
+  createAgentRouter,
+  topologicalOrder,
+  routedPlanToSupervisorPlan,
+  planToSupervisorInput,
+  planAndRun,
+  createPlanPipeline,
+} from './planner'
+export type {
+  AgentDescriptor,
+  PlanTask,
+  PlannerPlan,
+  PlanFormat,
+  PlanSource,
+  PlannerResult,
+  PlanIssue,
+  PlanIssueSeverity,
+  ValidatedPlan,
+  RouteAssignment,
+  RoutedTask,
+  RoutedPlan,
+  PlanExecutionStrategy,
+  PlannedExecutionResult,
+  PlannerDeps,
+  PlanValidatorDeps,
+  AgentRouterDeps,
+  PlanPipelineDeps,
+  PlanRunOptions,
+} from './planner'

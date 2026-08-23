@@ -42,6 +42,10 @@ PLAN_INSTRUCTIONS = """请把上面的任务分解为一个 JSON 任务计划，
 }
 子任务应当数量适中（通常 2-6 个）；可以并行的工作不要人为制造依赖。"""
 
+# A supervisor echoing PLAN_INSTRUCTIONS verbatim (echo/mock agents) yields
+# the example plan; treat its documented placeholder value as "no dependency".
+_PLACEHOLDER_DEPENDENCY = "前置任务的 id，没有依赖则为空数组"
+
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
@@ -120,7 +124,7 @@ def _tasks_from_json(raw: List[Dict[str, Any]]) -> List[Task]:
         used_ids.add(task_id)
         depends_on = [
             str(dep).strip() for dep in (entry.get("depends_on") or [])
-            if str(dep).strip()
+            if str(dep).strip() and str(dep).strip() != _PLACEHOLDER_DEPENDENCY
         ]
         # NOTE: the requested agent is kept verbatim so validation can detect
         # an *unknown* agent. Concrete routing happens later (see

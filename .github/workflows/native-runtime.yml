@@ -1,0 +1,59 @@
+name: DSH Native Runtime CI (source of truth)
+
+# THE official Native Runtime signal for packages/dsh-multi-agent/
+# (Task / TaskGraph / Scheduler / AgentRunner / strategies), including the
+# real-DSH-runtime suites: bundle artifact, config-created agents and the
+# ROOT dist/index.js release entry mounted by `dsh plugin add`.
+# The transitional root-native job inside ci.yml retires with the
+# convergence migration (snapshot tag: dhs-root-native-final).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "packages/dsh-multi-agent/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "cordis.patch.yml"
+      - ".github/workflows/native-runtime.yml"
+  pull_request:
+    paths:
+      - "packages/dsh-multi-agent/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "cordis.patch.yml"
+      - ".github/workflows/native-runtime.yml"
+
+jobs:
+  native-runtime:
+    name: Native runtime (typecheck / unit / build / real-DSH smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # corepack must be enabled BEFORE setup-node: the action resolves
+      # `cache: pnpm` by invoking pnpm, which does not exist on the runner
+      # until the shim is installed (node ships corepack on ubuntu images)
+      - name: Enable pnpm
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install workspace (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm --dir packages/dsh-multi-agent typecheck
+      - name: Unit tests
+        run: pnpm --dir packages/dsh-multi-agent test
+      - name: Build package bundle
+        run: pnpm --dir packages/dsh-multi-agent build
+      - name: Build root release entry + real-DSH smoke
+        run: pnpm test:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-release-artifacts
+          path: |
+            dist/index.js
+            packages/dsh-multi-agent/dist/dsh.bundle.js

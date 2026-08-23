@@ -43,3 +43,6 @@ _dbg*.py
 *.pfx
 .credentials.yaml
 .dsh/
+
+# Node (native runtime workspace)
+node_modules/

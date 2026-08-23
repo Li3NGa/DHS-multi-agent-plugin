@@ -1,11 +1,12 @@
 /**
- * Native Supervisor — Phase E1 Contract export surface.
+ * Native Supervisor — export surface.
  *
- * Phase E1 ships ONLY the contract: types, error model, lifecycle rules and
- * strategy boundary. There is no executable Supervisor yet (Phase E2).
+ * Phase E1 ships the contract (types, error model, lifecycle rules, strategy
+ * boundary). Phase E2 adds the executable Supervisor V1 (supervisor.ts) built
+ * on top of that frozen contract and the frozen Runtime.
  *
- * These are pure type/rule modules with no Runtime side effects, so importing
- * them is safe and does not modify the frozen Runtime.
+ * The executable module has no Runtime side effects on import; it only
+ * reaches the Runtime through the injected `execute: TaskExecute` at run time.
  */
 export {
   SupervisorError,
@@ -27,6 +28,9 @@ export {
 
 export { strategyEntryPoint, assertKnownStrategy } from './strategy'
 export type { BroadcastOptions, SequentialOptions, SequentialStep, RelayOptions } from './strategy'
+
+export { Supervisor, createSupervisor, validateSupervisorInput } from './supervisor'
+export type { SupervisorDeps, SupervisorStrategyEntryPoints } from './supervisor'
 
 export type {
   SupervisorPlan,

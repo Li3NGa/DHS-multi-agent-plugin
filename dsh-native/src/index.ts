@@ -107,6 +107,9 @@ export {
   isTerminalState,
   strategyEntryPoint,
   assertKnownStrategy,
+  Supervisor,
+  createSupervisor,
+  validateSupervisorInput,
 } from './supervisor'
 export type {
   SupervisorPlan,
@@ -120,4 +123,6 @@ export type {
   SupervisorSchedulerReport,
   SupervisorErrorKind,
   SupervisorErrorFields,
+  SupervisorDeps,
+  SupervisorStrategyEntryPoints,
 } from './supervisor'

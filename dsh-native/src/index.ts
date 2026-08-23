@@ -93,3 +93,31 @@ export type {
   SessionEvent,
   UserMessage,
 }
+
+// Phase E1 Native Supervisor contract (types/errors/lifecycle/boundary only).
+export {
+  SupervisorError,
+  SupervisorValidationError,
+  SupervisorExecutionError,
+  SupervisorCancellationError,
+  SupervisorTimeoutError,
+  SupervisorAggregationError,
+  isSupervisorError,
+  assertTransition,
+  isTerminalState,
+  strategyEntryPoint,
+  assertKnownStrategy,
+} from './supervisor'
+export type {
+  SupervisorPlan,
+  SupervisorStrategy,
+  SupervisorStrategyReport,
+  SupervisorRunStatus,
+  SupervisorPhase,
+  SupervisorState,
+  SupervisorRunInput,
+  SupervisorRunResult,
+  SupervisorSchedulerReport,
+  SupervisorErrorKind,
+  SupervisorErrorFields,
+} from './supervisor'

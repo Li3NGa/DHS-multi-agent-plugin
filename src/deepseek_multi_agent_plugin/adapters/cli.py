@@ -1,4 +1,4 @@
-﻿"""Command line interface.
+"""Command line interface.
 
 Commands:
 
@@ -111,7 +111,7 @@ def cmd_agents(args) -> int:
 
 
 def cmd_serve(args) -> int:
-    from .history import RunHistory
+    from ..history import RunHistory
     from .http import serve
     coord = _build(args)
     session_factory = None

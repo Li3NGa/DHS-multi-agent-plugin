@@ -81,10 +81,17 @@ class _BoundedExecutor:
                 self._slots.release()
 
         try:
-            return self._pool.submit(_run, *args, **kwargs)
+            future = self._pool.submit(_run, *args, **kwargs)
         except BaseException:
             self._slots.release()
             raise
+        # A queued future that gets cancelled never runs `_run`, so its slot
+        # would leak permanently (timeouts/aborts call future.cancel()).
+        # Compensate on cancellation; cancelled-vs-finished is exclusive.
+        future.add_done_callback(
+            lambda f: self._slots.release() if f.cancelled() else None
+        )
+        return future
 
     def shutdown(self, wait: bool = False, cancel_futures: bool = True) -> None:
         self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)

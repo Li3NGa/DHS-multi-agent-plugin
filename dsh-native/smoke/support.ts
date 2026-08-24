@@ -117,3 +117,15 @@ export async function bootHarness(
 export function realAgent(ctx: Context, id: string, provider = 'mock') {
   return ctx.agentLoop.create(SessionId(id), { provider, model: 'mock' })
 }
+
+
+/** One model response whose finish reason is an error (task failure). */
+export function errorResponse(message = 'scripted model failure'): StreamChunk[] {
+  const text = 'partial'
+  return [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    ...Array.from(text, (char): StreamChunk => ({ type: 'text-delta', index: 0, text: char })),
+    { type: 'usage', usage: { inputTokens: 5, outputTokens: 7 } },
+    { type: 'finish', reason: { kind: 'error', error: { message } } } as unknown as StreamChunk,
+  ]
+}

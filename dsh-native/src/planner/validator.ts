@@ -1,21 +1,23 @@
 /**
- * Native Plan Validator — Phase E3.
+ * Native Plan Validator — Phase E3, semantics adjusted in Phase E4.
  *
- * Structurally validates a PlannerPlan BEFORE routing, and applies a
- * strictly limited, semantically-safe repair so the plan can proceed:
- *   - drop an unknown explicit `agentId`   -> Router re-assigns
- *   - drop an unsupported required capability -> Router still routable
+ * Since Phase E4 the validator only JUDGES a PlannerPlan:
+ *   - validate() is pure: it computes the full issue trail and throws
+ *     PlanValidationError on hard structural errors. It NEVER mutates the
+ *     plan any more.
+ *   - validateAndRepair() keeps the historical behaviour for callers that
+ *     explicitly opt in: it validates, then delegates the two semantically
+ *     safe repairs (drop an unknown explicit agentId / drop unsupported
+ *     requiredCapabilities) to the Repair layer
+ *     (../recovery/repair.applyIssueRepairs). One implementation, no silent
+ *     repair inside the validator.
  *
- * Hard errors (no safe repair) surface as PlanValidationError:
+ * Hard errors (no safe repair) stay unchanged:
  *   - empty plan
  *   - duplicate / empty task id
  *   - missing prompt
  *   - self-dependency / unknown dependency
- *   - dependency cycle
- *
- * Cycle detection is a depth-first search over the task dependency edges.
- * The validator never calls the Router and never touches the Runtime; it
- * consumes and returns plain `PlannerPlan` values.
+ *   - dependency cycle (iterative DFS, stack-safe on deep plans)
  */
 import { PlanValidationError } from './errors'
 import type {
@@ -25,6 +27,7 @@ import type {
   PlannerPlan,
   ValidatedPlan,
 } from './types'
+import { applyIssueRepairs } from '../recovery/repair'
 
 export interface PlanValidatorDeps {
   /** The routable agent pool used to judge explicit ids / capabilities. */
@@ -39,10 +42,11 @@ export class PlanValidator {
   }
 
   /**
-   * Validate a plan; repair safe issues and return the (possibly repaired)
-   * plan with a full issue trail. Throws PlanValidationError on hard errors.
+   * Pure validation: compute the issue trail and throw on hard errors.
+   * The input plan is never mutated; unknown-agent / unsupported-capability
+   * findings are reported as warnings and left for the Repair layer.
    */
-  validateAndRepair(input: PlannerPlan): ValidatedPlan {
+  validate(input: PlannerPlan): ValidatedPlan {
     const tasks = input.tasks
     if (tasks.length === 0) {
       const issue: PlanIssue = {
@@ -54,156 +58,167 @@ export class PlanValidator {
     }
 
     const issues: PlanIssue[] = []
-    const repaired: PlanTask[] = []
-    let anyRepair = false
+    let anyError = false
 
     const seenIds = new Set<string>()
     const idSet = new Set<string>(tasks.map((task) => task.id))
     const agentIds = new Set<string>(this.#agents.map((agent) => agent.id))
 
     for (const task of tasks) {
-      let current: PlanTask = task
-
       // --- id checks ---
-      if (typeof current.id !== 'string' || current.id.length === 0) {
+      if (typeof task.id !== 'string' || task.id.length === 0) {
         issues.push({
           severity: 'error',
           code: 'empty-task-id',
           message: 'task id must be a non-empty string',
         })
+        anyError = true
         continue
       }
-      if (seenIds.has(current.id)) {
+      if (seenIds.has(task.id)) {
         issues.push({
           severity: 'error',
           code: 'duplicate-task-id',
-          message: `duplicate task id '${current.id}'`,
-          taskId: current.id,
+          message: `duplicate task id '${task.id}'`,
+          taskId: task.id,
         })
+        anyError = true
         continue
       }
-      seenIds.add(current.id)
+      seenIds.add(task.id)
 
       // --- prompt check ---
-      if (typeof current.prompt !== 'string' || current.prompt.length === 0) {
+      if (typeof task.prompt !== 'string' || task.prompt.length === 0) {
         issues.push({
           severity: 'error',
           code: 'missing-prompt',
-          message: `task '${current.id}' has no prompt`,
-          taskId: current.id,
+          message: `task '${task.id}' has no prompt`,
+          taskId: task.id,
         })
+        anyError = true
         continue
       }
 
       // --- dependency checks ---
-      if (current.dependsOn) {
-        for (const dep of current.dependsOn) {
-          if (dep === current.id) {
+      if (task.dependsOn !== undefined) {
+        for (const dep of task.dependsOn) {
+          if (dep === task.id) {
             issues.push({
               severity: 'error',
               code: 'self-dependency',
-              message: `task '${current.id}' depends on itself`,
-              taskId: current.id,
+              message: `task '${task.id}' depends on itself`,
+              taskId: task.id,
             })
+            anyError = true
           } else if (!idSet.has(dep)) {
             issues.push({
               severity: 'error',
               code: 'unknown-dependency',
-              message: `task '${current.id}' depends on unknown task '${dep}'`,
-              taskId: current.id,
+              message: `task '${task.id}' depends on unknown task '${dep}'`,
+              taskId: task.id,
             })
+            anyError = true
           }
         }
       }
 
-      // --- explicit agent repair (unknown -> let Router assign) ---
-      if (current.agentId !== undefined && !agentIds.has(current.agentId)) {
+      // --- agent / capability findings (warnings; Repair layer fixes them)
+      if (task.agentId !== undefined && !agentIds.has(task.agentId)) {
         issues.push({
           severity: 'warning',
           code: 'unknown-agent',
-          message: `task '${current.id}' names unknown agent '${current.agentId}'; reassigning`,
-          taskId: current.id,
+          message: `task '${task.id}' names unknown agent '${task.agentId}'; reassigning`,
+          taskId: task.id,
         })
-        const { agentId: _dropped, ...rest } = current
-        current = rest
-        anyRepair = true
       }
 
-      // --- capability repair (unsupported -> drop so it stays routable) ---
-      if (current.requiredCapabilities && current.requiredCapabilities.length > 0) {
-        const supported = this.#agents.some((agent) =>
-          current.requiredCapabilities!.every((cap) => agent.capabilities.includes(cap)),
+      if (
+        task.requiredCapabilities !== undefined &&
+        task.requiredCapabilities.length > 0 &&
+        !this.#agents.some((agent) =>
+          task.requiredCapabilities!.every((cap) => agent.capabilities.includes(cap)),
         )
-        if (!supported) {
-          issues.push({
-            severity: 'warning',
-            code: 'unsupported-capability',
-            message: `task '${current.id}' requires unsupported capabilities; dropping`,
-            taskId: current.id,
-          })
-          const { requiredCapabilities: _dropped, ...rest } = current
-          current = rest
-          anyRepair = true
-        }
+      ) {
+        issues.push({
+          severity: 'warning',
+          code: 'unsupported-capability',
+          message: `task '${task.id}' requires unsupported capabilities; dropping`,
+          taskId: task.id,
+        })
       }
-
-      repaired.push(current)
     }
 
-    // --- cycle detection over the repaired graph ---
-    const cycle = findCycle(repaired)
+    // --- cycle detection over the declared graph (iterative DFS) --------
+    const cycle = findCycle(tasks)
     if (cycle.length > 0) {
-      const issue: PlanIssue = {
+      issues.push({
         severity: 'error',
         code: 'cycle',
         message: `dependency cycle: ${cycle.join(' -> ')}`,
-      }
-      issues.push(issue)
-      throw new PlanValidationError('plan contains a dependency cycle', issues)
+      })
+      anyError = true
     }
 
-    if (issues.some((issue) => issue.severity === 'error')) {
+    if (anyError) {
       throw new PlanValidationError('plan failed validation', issues)
     }
 
-    return { plan: { tasks: repaired }, issues, repaired: anyRepair }
+    return { plan: { tasks }, issues, repaired: false }
+  }
+
+  /**
+   * Historical entry point: validate, then apply the Repair layer's safe
+   * fixes when the issue trail contains repairable findings. Behaviour is
+   * byte-compatible with the pre-E4 inline implementation.
+   */
+  validateAndRepair(input: PlannerPlan): ValidatedPlan {
+    const validated = this.validate(input)
+    const repaired = applyIssueRepairs(validated.plan, validated.issues)
+    if (repaired === undefined) return validated
+    return {
+      plan: repaired.plan,
+      issues: validated.issues,
+      repaired: true,
+    }
   }
 }
 
-/** Depth-first cycle detection over dependency edges; returns the cycle path. */
+/** Iterative depth-first cycle search (stack-safe for deep plans). */
 function findCycle(tasks: readonly PlanTask[]): string[] {
   const byId = new Map<string, PlanTask>()
   for (const task of tasks) byId.set(task.id, task)
 
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const stack: string[] = []
+  const color = new Map<string, number>()
+  for (const task of tasks) color.set(task.id, 0) // 0 white | 1 gray | 2 black
 
-  const visit = (id: string): string[] | undefined => {
-    if (visiting.has(id)) {
-      const start = stack.indexOf(id)
-      return [...stack.slice(start), id]
-    }
-    if (visited.has(id)) return undefined
-    visiting.add(id)
-    stack.push(id)
-    const task = byId.get(id)
-    if (task?.dependsOn) {
-      for (const dep of task.dependsOn) {
-        if (!byId.has(dep)) continue
-        const found = visit(dep)
-        if (found) return found
+  for (const root of tasks) {
+    if (color.get(root.id) !== 0) continue
+    const stack: { id: string; iter: number }[] = [{ id: root.id, iter: 0 }]
+    const path: string[] = [root.id]
+    color.set(root.id, 1)
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!
+      const deps = byId.get(frame.id)?.dependsOn ?? []
+      if (frame.iter < deps.length) {
+        const dep = deps[frame.iter]!
+        frame.iter += 1
+        if (dep === frame.id) continue // self-dep reported separately
+        const depColor = color.get(dep) ?? 2
+        if (depColor === 1) {
+          const start = path.indexOf(dep)
+          return [...path.slice(start === -1 ? 0 : start), dep]
+        }
+        if (depColor === 0 && byId.has(dep)) {
+          color.set(dep, 1)
+          path.push(dep)
+          stack.push({ id: dep, iter: 0 })
+        }
+      } else {
+        color.set(frame.id, 2)
+        path.pop()
+        stack.pop()
       }
     }
-    stack.pop()
-    visiting.delete(id)
-    visited.add(id)
-    return undefined
-  }
-
-  for (const task of tasks) {
-    const found = visit(task.id)
-    if (found) return found
   }
   return []
 }

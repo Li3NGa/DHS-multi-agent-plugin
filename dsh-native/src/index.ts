@@ -171,3 +171,40 @@ export type {
   PlanPipelineDeps,
   PlanRunOptions,
 } from './planner'
+
+// Phase E4 Native Recovery layer (Failure Model + Classification + Retry +
+// Repair V1 + Replan V1 + RecoveryManager). Wraps the frozen Supervisor with
+// a deterministic failure decision loop; Validator repair moved to Repair.
+export {
+  RECOVERABILITY,
+  classifyThrown,
+  classifyResult,
+  extractTaskFailures,
+  extractCompletedTaskIds,
+  RetryPolicy,
+  delay,
+  applyIssueRepairs,
+  clearAgentAssignments,
+  deterministicReplan,
+  RecoveryManager,
+  createRecoveryManager,
+  planId,
+} from './recovery'
+export type {
+  FailureCode,
+  Recoverability,
+  TaskFailureRef,
+  FailureRecord,
+  RecoveryExecutionContext,
+  RecoveryDecision,
+  RecoveryPolicyOptions,
+  RecoveryRunOptions,
+  RecoveryRunResult,
+  PlanRepair,
+  RepairRecord,
+  AssignmentRepairResult,
+  ReplanRule,
+  ReplanInput,
+  ReplanResult,
+  RecoveryManagerDeps,
+} from './recovery'

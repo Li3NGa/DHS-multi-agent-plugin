@@ -1,4 +1,4 @@
-﻿"""MCP (Model Context Protocol) stdio server for the multi-agent plugin.
+"""MCP (Model Context Protocol) stdio server for the multi-agent plugin.
 
 Exposes the collaboration engine to MCP hosts (DSH's dsh-mcp-client, Codex,
 Claude Code, ...) over newline-delimited JSON-RPC on stdin/stdout, using only
@@ -180,7 +180,10 @@ class McpServer:
         method = req.get("method", "")
         req_id = req.get("id")
         if method == "initialize":
-            params = req.get("params") or {}
+            params = req.get("params")
+            if not isinstance(params, dict):
+                # malformed params must not kill the stdio loop (E4 audit fix)
+                params = {}
             requested = params.get("protocolVersion", PROTOCOL_VERSION)
             negotiated = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
             return self._result(req_id, {
@@ -259,7 +262,18 @@ class McpServer:
                     }) + "\n")
                     stdout.flush()
                 continue
-            resp = self.handle_request(req)
+            try:
+                resp = self.handle_request(req)
+            except Exception as exc:  # noqa: BLE001 - stdio loop must survive bad input
+                resp = None
+                req_id = req.get("id")
+                if req_id is not None:
+                    stdout.write(json.dumps({
+                        "jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32603,
+                                  "message": f"internal error: {exc}"},
+                    }, ensure_ascii=False) + "\n")
+                    stdout.flush()
             if resp is not None:
                 stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
                 stdout.flush()

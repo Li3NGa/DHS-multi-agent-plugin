@@ -1,4 +1,4 @@
-﻿"""HTTP adapter server for the DeepSeek harness.
+"""HTTP adapter server for the DeepSeek harness.
 
 Endpoints:
 
@@ -43,12 +43,12 @@ import signal
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs
 
 from ..agents import AgentFactory
 from ..config import build_coordinator
-from ..coordinator import AgentCoordinator, DeepseekAdapter
+from ..coordinator import DEFAULT_REGISTER_KINDS, AgentCoordinator, DeepseekAdapter
 from ..history import RunHistory
 from ..observability import agent_health
 from ..security import REQUIRED_ROLE, TokenAuthenticator
@@ -363,6 +363,7 @@ def build_server(
     session_ttl: Optional[float] = None,
     max_sessions: Optional[int] = None,
     max_concurrent_runs: int = 4,
+    adapter_kwargs: Optional[Dict[str, Any]] = None,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
@@ -386,6 +387,7 @@ def build_server(
         history_prompt_limit=history_prompt_limit,
         history_final_limit=history_final_limit,
         max_concurrent_runs=max_concurrent_runs,
+        **(adapter_kwargs or {}),
     )
     server.auth_token = token
     if roles:
@@ -406,6 +408,7 @@ def serve(
     session_ttl: Optional[float] = None,
     max_sessions: Optional[int] = None,
     max_concurrent_runs: int = 4,
+    adapter_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
     server = build_server(
         host, port, coordinator,
@@ -418,6 +421,7 @@ def serve(
         session_ttl=session_ttl,
         max_sessions=max_sessions,
         max_concurrent_runs=max_concurrent_runs,
+        adapter_kwargs=adapter_kwargs,
     )
     auth = "roles" if roles else ("token" if token else "off")
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
@@ -493,10 +497,18 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser.add_argument("--max-runs", type=int,
                         default=os.environ.get("DSMA_MAX_CONCURRENT_RUNS", "4"),
                         help="cap concurrent run events (default: $DSMA_MAX_CONCURRENT_RUNS or 4)")
+    parser.add_argument("--allow-register-kind", action="append", default=[],
+                        metavar="KIND",
+                        help="opt-in extra remotely-registrable agent kinds "
+                             "(safe default set: mock|echo|deepseek|openai; "
+                             "cli/http/fallback/custom need this), repeatable")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # secure-by-default remote registration (E4 audit fix): cli executes
+    # local commands and http performs server-side requests - opt-in only.
+    allowed_register_kinds = set(DEFAULT_REGISTER_KINDS) | set(args.allow_register_kind)
     from ..config import load_config, load_dsh_credentials
     load_dsh_credentials()  # DEEPSEEK_API_KEY from ~/.dsh/.credentials.yaml if present
     session_factory: Optional[Callable[[], AgentCoordinator]]
@@ -529,7 +541,8 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
           history_final_limit=args.history_final_limit,
           session_ttl=args.session_ttl,
           max_sessions=args.max_sessions,
-          max_concurrent_runs=args.max_runs)
+          max_concurrent_runs=args.max_runs,
+          adapter_kwargs={"allowed_register_kinds": sorted(allowed_register_kinds)})
 
 
 if __name__ == "__main__":

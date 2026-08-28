@@ -8,8 +8,9 @@ Deprecated pre-1.0 methods live in ``.legacy`` and are mixed in here so old
 import paths keep working. DeepseekAdapter translates harness/HTTP events
 into coordinator runs.
 """
+import logging
 from threading import BoundedSemaphore, RLock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from .agents import Agent
 from .context import ContextPolicy
@@ -23,6 +24,14 @@ from .runtime import (
     start_run_budget,
     start_run_deadline,
 )
+
+log = logging.getLogger("deepseek-multi-agent-plugin")
+
+# Kinds remotely registrable by default over adapter `register` events.
+# `cli` executes local commands and `http` performs server-side requests:
+# both require explicit opt-in on the adapter (secure-by-default).
+DEFAULT_REGISTER_KINDS = frozenset({"mock", "echo", "deepseek", "openai"})
+_OPT_IN_REGISTER_KINDS = frozenset({"cli", "http", "custom", "fallback"})
 
 
 class AgentCoordinator(LegacyCoordinatorAPI):
@@ -228,6 +237,7 @@ class DeepseekAdapter:
         history_final_limit: Optional[int] = None,
         max_concurrent_runs: int = 4,
         run_gate_timeout: float = 1.0,
+        allowed_register_kinds: Optional[Iterable[str]] = None,
     ):
         self.coordinator = coordinator
         self.registry = registry
@@ -237,6 +247,11 @@ class DeepseekAdapter:
         self.max_concurrent_runs = max(1, int(max_concurrent_runs))
         self._run_gate_timeout = max(0.0, float(run_gate_timeout))
         self._run_gate = BoundedSemaphore(self.max_concurrent_runs)
+        self.allowed_register_kinds: frozenset = (
+            frozenset(allowed_register_kinds)
+            if allowed_register_kinds is not None
+            else DEFAULT_REGISTER_KINDS
+        )
 
     def _coordinator_for(self, event: Dict[str, Any]) -> AgentCoordinator:
         session_id = event.get("session_id")
@@ -313,15 +328,40 @@ class DeepseekAdapter:
             agent_configs = event.get("agents", [])
             if len(agent_configs) > self.MAX_REGISTER_AGENTS:
                 return {"error": f"too many agents (max {self.MAX_REGISTER_AGENTS})"}
-            added = []
+            # Gate restricted kinds BEFORE building anything, so a restricted
+            # kind can never be smuggled through as a different kind later.
+            # cli executes local commands; http performs server-side requests.
+            for cfg in agent_configs:
+                declared = str(
+                    (cfg if isinstance(cfg, dict) else {}).get("kind") or ""
+                ).strip().lower()
+                if (
+                    declared in _OPT_IN_REGISTER_KINDS
+                    and declared not in self.allowed_register_kinds
+                ):
+                    log.warning("register denied kind '%s' (not opted in)", declared)
+                    return {
+                        "error": (
+                            f"agent kind '{declared}' requires explicit opt-in on "
+                            f"this adapter (default-allowed kinds: "
+                            f"{sorted(DEFAULT_REGISTER_KINDS)})"
+                        )
+                    }
+            # Atomic registration: build everything first; only touch the
+            # registry when every config is valid. Raw error text stays in
+            # the server log, never on the wire.
+            built = []
             for cfg in agent_configs:
                 try:
-                    agent = AgentFactory.from_config(cfg)
-                except Exception as exc:  # noqa: BLE001 - report config errors on the wire
-                    return {"error": f"invalid agent config: {exc}"}
+                    built.append(AgentFactory.from_config(cfg))
+                except Exception as exc:  # noqa: BLE001 - sanitized for the wire
+                    log.warning("register rejected invalid config: %s", exc)
+                    return {"error": "invalid agent config (details logged)"}
+            registered = []
+            for agent in built:
                 coord.register_agent(agent)
-                added.append(agent.name)
-            return {"registered": added}
+                registered.append(agent.name)
+            return {"registered": registered}
         if t == "history":
             if self.history is None:
                 return {"records": [], "enabled": False}

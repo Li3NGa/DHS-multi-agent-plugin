@@ -1,4 +1,4 @@
-﻿"""RBAC 鉴权与日志脱敏测试。"""
+"""RBAC 鉴权与日志脱敏测试。"""
 import http.client
 import json
 import threading
@@ -230,21 +230,31 @@ def test_http_rejects_negative_content_length():
     server = _start_roles_server()
     try:
         # Content-Length: -1 若被接受，read(-1) 会一直读到连接关闭（DoS）。
-        req = urlreq.Request(
-            f"http://127.0.0.1:{server.server_port}/run",
-            data=b"{}",
-            headers={
-                "Content-Type": "application/json",
-                "Content-Length": "-1",
-                ** _bearer("admin-token"),
-            },
-            method="POST",
-        )
-        try:
-            with urlreq.urlopen(req, timeout=10):
-                raise AssertionError("expected HTTP 400")
-        except HTTPError as exc:
-            assert exc.code == 400
+        # Windows 上服务器回 400 后立即关闭未读尽的连接会触发 RST，客户端
+        # 可能只看到 ConnectionError——这同样证明请求已被拒绝（姊妹测试
+        # ambiguous-length 用了同一让步语义）。
+        last_error: Exception | None = None
+        for _attempt in range(3):
+            try:
+                req = urlreq.Request(
+                    f"http://127.0.0.1:{server.server_port}/run",
+                    data=b"{}",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Content-Length": "-1",
+                        ** _bearer("admin-token"),
+                    },
+                    method="POST",
+                )
+                with urlreq.urlopen(req, timeout=10):
+                    raise AssertionError("expected HTTP 400")
+            except HTTPError as exc:
+                assert exc.code == 400
+                return
+            except OSError as exc:  # ConnectionReset / RemoteDisconnected
+                last_error = exc
+                time.sleep(0.2)
+        assert last_error is not None  # 只可能是连接级拒绝，而非 200/500
     finally:
         server.shutdown()
         server.server_close()

@@ -2,10 +2,10 @@
  * Phase E4 — RecoveryManager decision loop (scenarios 13-17).
  */
 import { describe, expect, it } from 'vitest'
-import type { TaskExecute, Task } from '../src'
+import type { TaskExecute, Task } from '../../src'
 import { okOutcome, scriptedExecute } from './helpers'
-import { createRecoveryManager } from '../src/recovery'
-import { createSupervisor } from '../src/supervisor'
+import { createRecoveryManager } from '../../src/recovery'
+import { createSupervisor } from '../../src/supervisor'
 
 const AGENTS = [{ id: 'x', capabilities: [] }, { id: 'y', capabilities: [] }]
 
@@ -86,7 +86,6 @@ describe('Recovery decision loop', () => {
       },
       { runId: 'r15', input: 'p' },
     )
-    // attempt1: a ok, b fails, c dep-cascade -> replan prunes b,c -> attempt2 reruns [a]
     expect(result.status).toBe('completed')
     expect(result.replansUsed).toBe(1)
     expect(result.failures[0]?.code).toBe('DEPENDENCY_FAILURE')
@@ -153,9 +152,7 @@ describe('Recovery decision loop', () => {
     )
     expect(result.status).toBe('failed')
     expect(result.failures[0]?.code).toBe('TASK_ERROR')
-    expect(
-      result.failures[0]?.taskFailures?.some((ref) => ref.message === 'kaboom'),
-    ).toBe(true)
+    expect(result.failures[0]?.taskFailures?.some((ref) => ref.message === 'kaboom')).toBe(true)
     expect(result.attempts).toBe(1)
   })
 })

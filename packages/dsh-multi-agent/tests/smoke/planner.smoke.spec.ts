@@ -16,6 +16,10 @@
  * ctx.llm.registerAdapter route, as DSH's own tests do). The Planner layer
  * never touches ctx.agents directly — routing happens on AgentDescriptor
  * values, execution goes through the frozen Supervisor.
+ *
+ * Package tests keep the historical ../src import layout through the
+ * tests/src -> ../../src compatibility bridge. The production source remains
+ * packages/dsh-multi-agent/src; the bridge is test-only.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentRunner } from '../src/runner'
@@ -30,7 +34,6 @@ let ctx: Awaited<ReturnType<typeof bootHarness>>
 
 beforeAll(async () => {
   ctx = await bootHarness(adapter)
-  // create the routed agents once; ctx.agentLoop.create rejects duplicates
   realAgent(ctx, 'pl-writer')
   realAgent(ctx, 'pl-critic')
 })
@@ -44,7 +47,6 @@ const AGENTS: readonly AgentDescriptor[] = [
   { id: 'pl-critic', capabilities: ['review'] },
 ]
 
-/** Real wiring: Planner pipeline -> Supervisor -> AgentRunner -> real DSH. */
 function pipeline() {
   const runner = new AgentRunner(ctx)
   const execute: TaskExecute = (task, signal) => runner.run(task, signal)
@@ -78,19 +80,13 @@ describe('Planner V1 — real DSH integration', () => {
     const outcome = await planAndRun('write and review a report', pipeline(), {
       runId: 'planner-e2e',
     })
-
-    // planning stages
     expect(outcome.format).toBe('json')
     expect(outcome.validated.issues).toHaveLength(0)
-    // capability routing: write -> writer, review -> critic
     expect(outcome.routed.assignments.map((assignment) => [assignment.agentId, assignment.reason])).toEqual([
       ['pl-writer', 'capability'],
       ['pl-critic', 'capability'],
     ])
-    // dependency order preserved in the sequential mapping
     expect(outcome.supervisorInput.plan.strategy).toBe('sequential')
-
-    // real execution through the frozen Supervisor
     expect(outcome.result.status).toBe('completed')
     const report = sequentialReport(outcome.result)
     expect(report.ok).toBe(true)
@@ -110,9 +106,7 @@ describe('Planner V1 — real DSH integration', () => {
         planner: createPlanner({
           source: async () =>
             JSON.stringify({
-              tasks: [
-                { id: 'a', prompt: 'do it', agent: 'ghost-agent' },
-              ],
+              tasks: [{ id: 'a', prompt: 'do it', agent: 'ghost-agent' }],
             }),
         }),
         agents: AGENTS,
@@ -120,7 +114,6 @@ describe('Planner V1 — real DSH integration', () => {
       },
       { runId: 'planner-repair' },
     )
-    // the unknown explicit agent was dropped and re-routed round-robin
     expect(outcome.validated.repaired).toBe(true)
     expect(outcome.validated.issues.some((issue) => issue.code === 'unknown-agent')).toBe(true)
     expect(outcome.routed.tasks[0]!.agentId).toBe('pl-writer')

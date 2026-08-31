@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,6 +18,8 @@ for (const required of requiredPaths) {
   }
 }
 
+// Only inspect production source and tests. The test tree contains a small
+// compatibility bridge named `tests/src`; do not follow symlinked directories.
 const sourceRoots = [
   'packages/dsh-multi-agent/src',
   'packages/dsh-multi-agent/tests',
@@ -26,14 +28,17 @@ const sourceRoots = [
 function walk(directory) {
   for (const entry of readdirSync(directory)) {
     const absolute = join(directory, entry)
-    const info = statSync(absolute)
-    if (info.isDirectory()) walk(absolute)
-    else if (/\.(?:ts|tsx|mts|cts|mjs|json|yml|yaml)$/.test(entry)) {
-      const relativePath = relative(rootPath, absolute).replaceAll('\\', '/')
-      const text = readFileSync(absolute, 'utf8')
-      if (/dsh-native/i.test(text)) {
-        violations.push(`legacy Native path referenced from production-controlled file: ${relativePath}`)
-      }
+    const lstat = lstatSync(absolute)
+    if (lstat.isSymbolicLink()) continue
+    if (lstat.isDirectory()) {
+      walk(absolute)
+      continue
+    }
+    if (!/\.(?:ts|tsx|mts|cts|mjs|json|yml|yaml)$/.test(entry)) continue
+    const relativePath = relative(rootPath, absolute).replaceAll('\\', '/')
+    const text = readFileSync(absolute, 'utf8')
+    if (/dsh-native[\\/]/i.test(text)) {
+      violations.push(`legacy Native path referenced from production-controlled file: ${relativePath}`)
     }
   }
 }
@@ -45,10 +50,14 @@ const build = String(packageJson.scripts?.build ?? '')
 if (!build.includes('packages/dsh-multi-agent/src/index.ts')) {
   violations.push('root build does not use packages/dsh-multi-agent/src/index.ts')
 }
-
-const patch = readFileSync(join(rootPath, 'cordis.patch.yml'), 'utf8')
-if (!patch.includes('dist/index.js')) {
-  violations.push('cordis.patch.yml does not point at the root release entry dist/index.js')
+if (packageJson.main !== 'dist/index.js') {
+  violations.push(`root package main must be dist/index.js (got ${String(packageJson.main)})`)
+}
+if (packageJson.exports?.['.']?.import !== './dist/index.js') {
+  violations.push('root package exports.import must be ./dist/index.js')
+}
+if (packageJson.dsh?.bundle?.patch !== './cordis.patch.yml') {
+  violations.push('root package dsh.bundle.patch must be ./cordis.patch.yml')
 }
 
 if (violations.length > 0) {

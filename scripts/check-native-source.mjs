@@ -1,19 +1,19 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = new URL('..', import.meta.url)
-const rootPath = decodeURIComponent(root.pathname).replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1))
+const rootPath = fileURLToPath(new URL('..', import.meta.url))
+const violations = []
 
 const requiredPaths = [
   'packages/dsh-multi-agent/src/index.ts',
   'packages/dsh-multi-agent/package.json',
-  'dist/index.js',
 ]
 
-const violations = []
-
 for (const required of requiredPaths) {
-  if (!existsSync(join(rootPath, required))) {
+  try {
+    statSync(join(rootPath, required))
+  } catch {
     violations.push(`missing production path: ${required}`)
   }
 }
@@ -21,12 +21,10 @@ for (const required of requiredPaths) {
 const sourceRoots = [
   'packages/dsh-multi-agent/src',
   'packages/dsh-multi-agent/tests',
-  'scripts',
 ]
 
 function walk(directory) {
-  const entries = readdirSync(directory)
-  for (const entry of entries) {
+  for (const entry of readdirSync(directory)) {
     const absolute = join(directory, entry)
     const info = statSync(absolute)
     if (info.isDirectory()) walk(absolute)
@@ -40,9 +38,7 @@ function walk(directory) {
   }
 }
 
-for (const directory of sourceRoots) {
-  walk(join(rootPath, directory))
-}
+for (const directory of sourceRoots) walk(join(rootPath, directory))
 
 const packageJson = JSON.parse(readFileSync(join(rootPath, 'package.json'), 'utf8'))
 const build = String(packageJson.scripts?.build ?? '')

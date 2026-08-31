@@ -86,7 +86,7 @@ describe('full bundle on the real DSH runtime', () => {
       { id: 'a', agentId: 'b1', prompt: 'dag-a' },
       { id: 'b', agentId: 'b1', prompt: 'dag-b' },
       { id: 'c', agentId: 'b1', prompt: 'dag-c', dependsOn: ['a', 'b'] },
-    ], { concurrency: 2 })
+    ])
     expect(report.ok).toBe(true)
     expect([...report.results.keys()]).toEqual(['a', 'b', 'c'])
     expect(report.results.get('a')?.text).toBe('dag-a')

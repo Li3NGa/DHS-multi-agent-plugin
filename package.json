@@ -12,7 +12,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "test": "pnpm --dir packages/dsh-multi-agent test",

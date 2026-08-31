@@ -20,6 +20,7 @@
  *   - Planner integration extension points
  */
 import type { SupervisorStrategy } from '../supervisor'
+import type { SchedulerReport } from '../scheduler'
 
 /** A routable agent known to the runtime's ctx.agents registry. */
 export interface AgentDescriptor {
@@ -148,4 +149,25 @@ export interface PlannedExecutionResult {
   readonly supervisorInput: import('../supervisor').SupervisorRunInput
   /** The Supervisor's aggregated run result. */
   readonly result: import('../supervisor').SupervisorRunResult
+}
+
+/** Options shared by a planned DAG execution. */
+export interface PlanDagRunOptions {
+  readonly runId: string
+  readonly concurrency?: number
+  readonly signal?: AbortSignal
+  readonly timeoutMs?: number
+  readonly metadata?: Readonly<Record<string, unknown>>
+}
+
+/** Result of Planner -> Validator -> Router -> arbitrary DAG Scheduler. */
+export interface PlannedDagExecutionResult {
+  readonly plan: PlannerPlan
+  readonly format: PlanFormat
+  readonly validated: ValidatedPlan
+  readonly routed: RoutedPlan
+  readonly schedulerReport: SchedulerReport
+  readonly runId: string
+  readonly durationMs: number
+  readonly metadata?: Readonly<Record<string, unknown>>
 }

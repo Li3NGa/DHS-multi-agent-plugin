@@ -9,9 +9,10 @@ import { beforeAll, describe, expect, it, afterAll } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootHarness, ScriptedAdapter, type ConfigAgentEntry } from './support'
 import type { MultiAgentApi } from '../../src/index'
-import { apply as bundleApply, inject as bundleInject } from '../../src/index'
 
-type BundleExports = typeof import('../../src/index')
+type BundleApi = { MultiAgentApi: never }
+const bundleUrl = new URL('../../dist/dsh.bundle.js', import.meta.url).href
+const bundle = (await import(/* @vite-ignore */ bundleUrl)) as typeof import('../../src/index') & BundleApi
 const adapter = new ScriptedAdapter(['echo'])
 const contexts: Context[] = []
 
@@ -27,11 +28,10 @@ describe('public recovery entrypoint on real DSH', () => {
       { id: 'live', sessionId: 'live', provider: 'mock', model: 'mock' } satisfies ConfigAgentEntry,
     ])
     contexts.push(ctx)
-    // Load the current source module here; the package smoke suite also
-    // verifies the built bundle separately. This test exercises the public
-    // API semantics with the real DSH host.
-    const plugin = { apply: bundleApply, inject: [...bundleInject] } as Parameters<Context['plugin']>[0]
-    await ctx.plugin(plugin, {})
+    await ctx.plugin(
+      { apply: bundle.apply, inject: [...bundle.inject] } as Parameters<Context['plugin']>[0],
+      {},
+    )
   })
 
   afterAll(async () => {
@@ -41,8 +41,7 @@ describe('public recovery entrypoint on real DSH', () => {
   })
 
   it('repairs an unavailable agent and reroutes to a live config-created agent', async () => {
-    const api = apiOf(ctx)
-    const result = await api.runWithRecovery(
+    const result = await apiOf(ctx).runWithRecovery(
       { tasks: [{ id: 'task-a', agentId: 'dead', prompt: 'recover me' }] },
       {
         runId: 'r4-smoke',
@@ -62,5 +61,3 @@ describe('public recovery entrypoint on real DSH', () => {
     expect(result.lastResult?.status).toBe('completed')
   })
 })
-
-void ({} as BundleExports)

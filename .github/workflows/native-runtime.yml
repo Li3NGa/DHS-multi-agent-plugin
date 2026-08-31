@@ -54,6 +54,8 @@ jobs:
         run: pnpm --dir packages/dsh-multi-agent build
       - name: Build root release entry + real-DSH smoke
         run: pnpm test:smoke
+      - name: Validate release metadata
+        run: pnpm release:check "npm-v$(node -p "require('./package.json').version")"
       - name: Clean consumer package smoke
         run: |
           set -euo pipefail

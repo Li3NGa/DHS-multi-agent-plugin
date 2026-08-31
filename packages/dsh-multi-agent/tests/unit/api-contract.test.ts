@@ -12,6 +12,20 @@ import { GraphError, TaskGraph } from '../../src/graph'
 import { Scheduler } from '../../src/scheduler'
 import { outcomeFromEvents, type TaskOutcome } from '../../src/runner'
 
+const FROZEN_RUNTIME_VALUE_EXPORTS = [
+  'AgentRunner',
+  'DEFAULT_TIMEOUT_MS',
+  'GraphError',
+  'Scheduler',
+  'Task',
+  'TaskGraph',
+  'apply',
+  'inject',
+  'runBroadcast',
+  'runRelay',
+  'runSequential',
+] as const
+
 function outcome(taskId: string, status: TaskOutcome['status'], error?: string): TaskOutcome {
   return {
     taskId, status,
@@ -23,20 +37,18 @@ function outcome(taskId: string, status: TaskOutcome['status'], error?: string):
 }
 
 describe('public API surface (docs/runtime-api.md §1)', () => {
-  it('exports exactly the frozen value surface', () => {
-    expect(Object.keys(api).sort()).toEqual([
-      'AgentRunner',
-      'DEFAULT_TIMEOUT_MS',
-      'GraphError',
-      'Scheduler',
-      'Task',
-      'TaskGraph',
-      'apply',
-      'inject',
-      'runBroadcast',
-      'runRelay',
-      'runSequential',
-    ])
+  it('preserves exactly the frozen runtime core value surface', () => {
+    const presentFrozen = Object.keys(api)
+      .filter((key) => (FROZEN_RUNTIME_VALUE_EXPORTS as readonly string[]).includes(key))
+      .sort()
+    expect(presentFrozen).toEqual([...FROZEN_RUNTIME_VALUE_EXPORTS].sort())
+  })
+
+  it('allows additive higher-level orchestration exports', () => {
+    expect(typeof api.createSupervisor).toBe('function')
+    expect(typeof api.createPlanner).toBe('function')
+    expect(typeof api.createRecoveryManager).toBe('function')
+    expect(typeof api.planAndRun).toBe('function')
   })
 
   it('kinds and constants match the contract', () => {
@@ -118,7 +130,6 @@ describe('TaskGraph contract (§4)', () => {
     graph.add({ id: 'b', agentId: 'w', prompt: 'p', dependsOn: ['a'] })
     expect(graph.tasks().map((t) => t.id)).toEqual(['a', 'b'])
     expect(graph.ready().map((t) => t.id)).toEqual(['a'])
-    // pure query: repeated calls do not consume or mutate
     expect(graph.ready().map((t) => t.id)).toEqual(['a'])
     expect(graph.get('a')!.status).toBe('pending')
     graph.get('a')!.status = 'completed'
@@ -136,7 +147,6 @@ describe('Scheduler contract (§5)', () => {
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
     graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
     const scheduler = new Scheduler(async (task) => {
-      // b finishes first
       if (task.id === 'a') await new Promise((r) => setTimeout(r, 5))
       return outcome(task.id, 'completed')
     })
@@ -211,7 +221,7 @@ describe('AgentRunner outcome mapping contract (§7–§10)', () => {
     const timedOut = outcomeFromEvents('t', events({ kind: 'aborted', reason: { kind: 'hook', reason: 'r' } }), { ...base, timedOut: true })
     expect(timedOut.status).toBe('failed')
     expect(timedOut.error).toContain('timeout:')
-    expect(timedOut.text).toBe('hello') // interrupted/partial preserved
+    expect(timedOut.text).toBe('hello')
 
     const cancelled = outcomeFromEvents('t', events({ kind: 'aborted', reason: { kind: 'hook', reason: 'r' } }), { ...base, cancelledBySignal: true })
     expect([cancelled.status, cancelled.error]).toEqual(['cancelled', 'cancelled'])

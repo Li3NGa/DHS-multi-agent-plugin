@@ -1,10 +1,8 @@
 /**
- * Native Planner — Phase E3 export surface.
+ * Native Planner — E3/E5 export surface.
  *
  * Planner Contract + Planner V1 + Plan Validator + Agent Router +
- * Supervisor Integration. This layer sits in front of the frozen E1/E2
- * Supervisor and the frozen Runtime; it introduces no duplicate models and
- * reaches the Runtime only through `Supervisor.run`.
+ * Supervisor Integration + direct arbitrary-DAG execution.
  */
 export type {
   AgentDescriptor,
@@ -21,6 +19,8 @@ export type {
   RoutedPlan,
   PlanExecutionStrategy,
   PlannedExecutionResult,
+  PlanDagRunOptions,
+  PlannedDagExecutionResult,
 } from './types'
 
 export {
@@ -46,6 +46,7 @@ export {
   routedPlanToSupervisorPlan,
   planToSupervisorInput,
   planAndRun,
+  planAndRunDag,
   createPlanPipeline,
 } from './integration'
 export type { PlanPipelineDeps, PlanRunOptions } from './integration'

@@ -80,6 +80,22 @@ describe('full bundle on the real DSH runtime', () => {
     expect(report.results.get('t')?.text).toBe('bundle check')
   })
 
+  it('runs an arbitrary DAG through the bundle-mounted API without linearization', async () => {
+    const api = multiAgentOf(ctx)!
+    ctx.agentLoop.create(SessionId('b2'), { provider: 'mock', model: 'mock' })
+    ctx.agentLoop.create(SessionId('b3'), { provider: 'mock', model: 'mock' })
+    const report = await api.runDag([
+      { id: 'a', agentId: 'b1', prompt: 'dag-a' },
+      { id: 'b', agentId: 'b2', prompt: 'dag-b' },
+      { id: 'c', agentId: 'b3', prompt: 'dag-c', dependsOn: ['a', 'b'] },
+    ])
+    expect(report.ok).toBe(true)
+    expect([...report.results.keys()]).toEqual(['a', 'b', 'c'])
+    expect(report.results.get('a')?.text).toBe('dag-a')
+    expect(report.results.get('b')?.text).toBe('dag-b')
+    expect(report.results.get('c')?.text).toBe('dag-c')
+  })
+
   it('unloading the plugin fiber removes the service (no residue) and reload works', async () => {
     // dispose the fiber mounted by the first test
     await mounted!.dispose()

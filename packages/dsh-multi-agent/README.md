@@ -40,13 +40,15 @@ src/
     sequential.ts
     relay.ts
     broadcast.ts
+    dag.ts
     contract.ts
   index.ts
 ```
 
-The Native execution path is:
+The Native execution paths are now:
 
 ```text
+Supervisor path:
 input
   -> Planner
   -> Validator
@@ -56,7 +58,16 @@ input
   -> Scheduler
   -> AgentRunner
   -> Real DSH
-  -> Recovery (when required)
+  -> Recovery (when explicitly orchestrated)
+
+Arbitrary-DAG path:
+input
+  -> Planner
+  -> Validator
+  -> Router
+  -> Scheduler
+  -> AgentRunner
+  -> Real DSH
 ```
 
 ## Development
@@ -75,16 +86,18 @@ The package test and smoke suites validate the package source tree. The release 
 
 ## DSH integration
 
-Use the root `cordis.patch.yml` or the example under this package. The real-DSh smoke suite uses the published `@deepseek-ai/*` runtime packages and a scripted adapter without an API key.
+Use the root `cordis.patch.yml` or the example under this package. The real-DSH smoke suite uses the published `@deepseek-ai/*` runtime packages and a scripted adapter without an API key.
 
 ## Current Native V1 boundaries
 
-Native V1 is intentionally limited to the verified Strategy Contract:
+Native V1 keeps the verified Supervisor Strategy Contract:
 
 - `sequential`
 - `broadcast`
 - `relay`
 
-The Planner can describe arbitrary DAG dependencies, but unsupported DAG shapes are deterministically linearized into sequential execution. This is a documented architecture limitation; it is not a reason to fork the current Strategy Contract mid-release.
+R3 adds a **direct DAG execution capability** through `runDag()` and `planAndRunDag()`. Arbitrary dependency graphs are preserved and executed by the existing Scheduler, so independent branches may run concurrently instead of being forced into a topological linearization.
 
-No LLM Planner, database, dashboard, Debate or Consensus implementation is part of the current Native V1 production path.
+The direct DAG path deliberately does not extend `StrategyKind` or modify the frozen Supervisor V1 contract. This keeps the Supervisor compatibility boundary stable while exposing the Runtime's actual DAG capability.
+
+No LLM Planner, database, dashboard, Debate or Consensus implementation is part of the current Native production path.

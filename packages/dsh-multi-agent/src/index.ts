@@ -7,6 +7,7 @@ import { Task, type TaskSpec, type TaskStatus, type TaskMetadata } from './task'
 import { runSequential, type SequentialOptions, type SequentialReport, type SequentialStep } from './strategies/sequential'
 import { runRelay, type RelayOptions, type RelayReport } from './strategies/relay'
 import { runBroadcast, type BroadcastOptions, type BroadcastReport } from './strategies/broadcast'
+import { runDag, type DagOptions } from './strategies/dag'
 import type { StrategyReport, StrategyTask, StrategyError, StrategyMetadata, StrategyKind, StrategyRunStatus } from './strategies/contract'
 
 export const inject = ['agents']
@@ -22,6 +23,8 @@ export interface MultiAgentApi {
   runSequential(steps: readonly SequentialStep[], options?: Omit<SequentialOptions, 'concurrency'>): Promise<SequentialReport>
   runRelay(options: Omit<RelayOptions, 'concurrency'>): Promise<RelayReport>
   runBroadcast(options: Omit<BroadcastOptions, 'concurrency'>): Promise<BroadcastReport>
+  /** Execute an arbitrary dependency graph without linearizing it. */
+  runDag(tasks: readonly TaskSpec[], options?: Omit<DagOptions, 'concurrency'>): Promise<SchedulerReport>
 }
 
 export function apply(ctx: DshContext, config: PluginConfig = {}): void {
@@ -32,12 +35,13 @@ export function apply(ctx: DshContext, config: PluginConfig = {}): void {
     runSequential: (steps, options) => runSequential(execute, steps, { concurrency: config.concurrency, ...options }),
     runRelay: (options) => runRelay(execute, { concurrency: config.concurrency, ...options }),
     runBroadcast: (options) => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
+    runDag: (tasks, options) => runDag(execute, tasks, { concurrency: config.concurrency, ...options }),
   }
   ctx.reflect?.provide('multiAgent', api)
 }
 
-export { AgentRunner, Scheduler, Task, TaskGraph, GraphError, runSequential, runRelay, runBroadcast }
-export type { AgentRunnerOptions, TaskExecute, TaskOutcome, TaskRawEvents, TaskSpec, TaskStatus, TaskMetadata, SchedulerOptions, SchedulerReport, SequentialOptions, SequentialReport, SequentialStep, RelayOptions, RelayReport, BroadcastOptions, BroadcastReport, StrategyReport, StrategyTask, StrategyError, StrategyMetadata, StrategyKind, StrategyRunStatus, DshContext, DshAgentHandle, DshAgentLookup, SessionEvent, UserMessage }
+export { AgentRunner, Scheduler, Task, TaskGraph, GraphError, runSequential, runRelay, runBroadcast, runDag }
+export type { AgentRunnerOptions, TaskExecute, TaskOutcome, TaskRawEvents, TaskSpec, TaskStatus, TaskMetadata, SchedulerOptions, SchedulerReport, SequentialOptions, SequentialReport, SequentialStep, RelayOptions, RelayReport, BroadcastOptions, BroadcastReport, DagOptions, StrategyReport, StrategyTask, StrategyError, StrategyMetadata, StrategyKind, StrategyRunStatus, DshContext, DshAgentHandle, DshAgentLookup, SessionEvent, UserMessage }
 
 export {
   SupervisorError, SupervisorValidationError, SupervisorExecutionError, SupervisorCancellationError, SupervisorTimeoutError, SupervisorAggregationError,
@@ -53,12 +57,12 @@ export type {
 export {
   PlannerError, PlanParseError, PlanValidationError, PlanRoutingError, PlanIntegrationError, isPlannerError,
   PlannerV1, createPlanner, parsePlanText, PlanValidator, createPlanValidator, AgentRouter, createAgentRouter,
-  topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, createPlanPipeline,
+  topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, planAndRunDag, createPlanPipeline,
 } from './planner'
 export type {
   AgentDescriptor, PlanTask, PlannerPlan, PlanFormat, PlanSource, PlannerResult, PlanIssue, PlanIssueSeverity,
   ValidatedPlan, RouteAssignment, RoutedTask, RoutedPlan, PlanExecutionStrategy, PlannedExecutionResult,
-  PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions,
+  PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions, PlanDagRunOptions, PlannedDagExecutionResult,
 } from './planner'
 
 export {

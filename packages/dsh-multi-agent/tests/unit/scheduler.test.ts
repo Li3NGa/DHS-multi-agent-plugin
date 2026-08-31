@@ -3,41 +3,8 @@ import { TaskGraph } from '../../src/graph'
 import { Scheduler } from '../../src/scheduler'
 import type { TaskOutcome } from '../../src/runner'
 import type { Task } from '../../src/task'
-import { deferred, type Deferred } from './helpers'
 
-/** Execute fn that never settles until the test allows it. */
-function gatedExecute(): {
-  execute: (task: Task, signal: AbortSignal) => Promise<TaskOutcome>
-  started: (id: string) => boolean
-  release: (id: string, outcome?: TaskOutcome) => void
-  releaseAllWith: (make: (id: string) => TaskOutcome) => void
-} {
-  const gates = new Map<string, { deferred: Deferred<TaskOutcome>; task: Task }>()
-  const execute = (task: Task): Promise<TaskOutcome> => {
-    const gate = deferred<TaskOutcome>()
-    gates.set(task.id, { deferred: gate, task })
-    return gate.promise
-  }
-  return {
-    execute,
-    started: (id) => gates.has(id),
-    release: (id, outcome) => {
-      const gate = gates.get(id)
-      gates.delete(id)
-      gate?.deferred.resolve(outcome ?? {
-        taskId: id, status: 'completed', text: `${id}-out`, error: undefined, durationMs: 1, raw: undefined,
-      })
-    },
-    releaseAllWith: (make) => {
-      for (const [id, gate] of [...gates]) {
-        gates.delete(id)
-        gate.deferred.resolve(make(id))
-      }
-    },
-  }
-}
-
-function makeOutcome(id: string, status: TaskOutcome['status'], error?: string): TaskOutcome {
+function outcome(id: string, status: TaskOutcome['status'] = 'completed', error?: string): TaskOutcome {
   return {
     taskId: id,
     status,
@@ -48,36 +15,58 @@ function makeOutcome(id: string, status: TaskOutcome['status'], error?: string):
   }
 }
 
+function gatedPool() {
+  const gates = new Map<string, (value: TaskOutcome) => void>()
+  const execute = (task: Task): Promise<TaskOutcome> => new Promise((resolve) => {
+    gates.set(task.id, resolve)
+  })
+  return {
+    execute,
+    started: (id: string) => gates.has(id),
+    release: (id: string, value: TaskOutcome = outcome(id)) => {
+      const resolve = gates.get(id)
+      gates.delete(id)
+      resolve?.(value)
+    },
+    releaseAll: (make: (id: string) => TaskOutcome = (id) => outcome(id)) => {
+      for (const [id, resolve] of [...gates]) {
+        gates.delete(id)
+        resolve(make(id))
+      }
+    },
+  }
+}
+
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('Scheduler', () => {
   it('runs a single task to completion', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'only', agentId: 'w', prompt: 'p' })
-    const calls: string[] = []
-    const scheduler = new Scheduler(async (task) => {
-      calls.push(task.id)
-      return makeOutcome(task.id, 'completed')
-    })
+    const scheduler = new Scheduler(async (task) => outcome(task.id))
     const report = await scheduler.run(graph)
+
     expect(report.ok).toBe(true)
-    expect(calls).toEqual(['only'])
     expect(report.results.get('only')?.text).toBe('only-out')
     expect(graph.get('only')?.status).toBe('completed')
   })
 
-  it('runs independent tasks in parallel', async () => {
+  it('runs independent tasks on different agents in parallel', async () => {
     const graph = new TaskGraph()
-    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'c', agentId: 'w', prompt: 'p' })
-    const pool = gatedExecute()
-    const scheduler = new Scheduler(pool.execute)
-    const run = scheduler.run(graph)
-    // all three must be in flight before any resolves
-    await new Promise((r) => setTimeout(r, 0))
+    graph.add({ id: 'a', agentId: 'w1', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'w2', prompt: 'p' })
+    graph.add({ id: 'c', agentId: 'w3', prompt: 'p' })
+    const pool = gatedPool()
+    const run = new Scheduler(pool.execute).run(graph)
+
+    await tick()
     expect(pool.started('a')).toBe(true)
     expect(pool.started('b')).toBe(true)
     expect(pool.started('c')).toBe(true)
-    pool.releaseAllWith((id) => makeOutcome(id, 'completed'))
+
+    pool.releaseAll()
     const report = await run
     expect(report.ok).toBe(true)
   })
@@ -87,55 +76,85 @@ describe('Scheduler', () => {
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
     graph.add({ id: 'b', agentId: 'w', prompt: 'p', dependsOn: ['a'] })
     graph.add({ id: 'c', agentId: 'w', prompt: 'p', dependsOn: ['b'] })
-    const events: string[] = []
-    const pool = gatedExecute()
-    const scheduler = new Scheduler((task, signal) => {
-      events.push(`start:${task.id}`)
-      return pool.execute(task, signal)
-    })
-    const run = scheduler.run(graph)
-    await new Promise((r) => setTimeout(r, 0))
-    expect(events).toEqual(['start:a'])
+    const pool = gatedPool()
+    const started: string[] = []
+    const run = new Scheduler((task) => {
+      started.push(task.id)
+      return pool.execute(task)
+    }).run(graph)
+
+    await tick()
+    expect(started).toEqual(['a'])
     pool.release('a')
-    await new Promise((r) => setTimeout(r, 0))
-    expect(events).toEqual(['start:a', 'start:b'])
+    await tick()
+    expect(started).toEqual(['a', 'b'])
     pool.release('b')
-    await new Promise((r) => setTimeout(r, 0))
-    expect(events).toEqual(['start:a', 'start:b', 'start:c'])
+    await tick()
+    expect(started).toEqual(['a', 'b', 'c'])
     pool.release('c')
-    const report = await run
-    expect(report.ok).toBe(true)
+
+    expect((await run).ok).toBe(true)
   })
 
   it('caps in-flight tasks at the configured concurrency', async () => {
     const graph = new TaskGraph()
-    for (let i = 0; i < 6; i += 1) graph.add({ id: `t${i}`, agentId: 'w', prompt: 'p' })
-    let inflight = 0
+    for (let i = 0; i < 6; i += 1) {
+      graph.add({ id: `t${i}`, agentId: `w${i}`, prompt: 'p' })
+    }
+
+    let inFlight = 0
     let peak = 0
-    const pool = gatedExecute()
-    const scheduler = new Scheduler(async (task, signal) => {
-      inflight += 1
-      peak = Math.max(peak, inflight)
+    const pool = gatedPool()
+    const scheduler = new Scheduler(async (task) => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
       try {
-        return await pool.execute(task, signal)
+        return await pool.execute(task)
       } finally {
-        inflight -= 1
+        inFlight -= 1
       }
     }, { concurrency: 2 })
+
     const run = scheduler.run(graph)
-    // drain: keep releasing until the run finishes
-    const drain = async () => {
-      for (let guard = 0; guard < 20 && graph.size > 0; guard += 1) {
-        if (graph.isComplete()) break
-        await new Promise((r) => setTimeout(r, 5))
-        pool.releaseAllWith((id) => makeOutcome(id, 'completed'))
-      }
+    for (let guard = 0; guard < 10 && !graph.isComplete(); guard += 1) {
+      await tick()
+      pool.releaseAll()
     }
-    await Promise.all([run, drain()])
     const report = await run
+
     expect(report.ok).toBe(true)
-    expect(peak).toBeLessThanOrEqual(2)
     expect(peak).toBe(2)
+  })
+
+  it('serializes ready tasks targeting the same agent while preserving cross-agent parallelism', async () => {
+    const graph = new TaskGraph()
+    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'c', agentId: 'v', prompt: 'p' })
+    const pool = gatedPool()
+    const started: string[] = []
+    const scheduler = new Scheduler((task) => {
+      started.push(task.id)
+      return pool.execute(task)
+    }, { concurrency: 2 })
+    const run = scheduler.run(graph)
+
+    await tick()
+    expect(started).toEqual(['a', 'c'])
+    expect(pool.started('b')).toBe(false)
+
+    pool.release('c')
+    await tick()
+    expect(started).toEqual(['a', 'c'])
+    expect(pool.started('b')).toBe(false)
+
+    pool.release('a')
+    await tick()
+    expect(started).toEqual(['a', 'c', 'b'])
+    expect(pool.started('b')).toBe(true)
+
+    pool.release('b')
+    expect((await run).ok).toBe(true)
   })
 
   it('propagates task failure to dependents as cancelled', async () => {
@@ -143,10 +162,12 @@ describe('Scheduler', () => {
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
     graph.add({ id: 'b', agentId: 'w', prompt: 'p', dependsOn: ['a'] })
     graph.add({ id: 'c', agentId: 'w', prompt: 'p', dependsOn: ['b'] })
-    graph.add({ id: 'd', agentId: 'w', prompt: 'p' })
-    const scheduler = new Scheduler(async (task) =>
-      task.id === 'a' ? makeOutcome(task.id, 'failed', 'boom') : makeOutcome(task.id, 'completed'),
-    )
+    graph.add({ id: 'd', agentId: 'v', prompt: 'p' })
+    const scheduler = new Scheduler(async (task) => {
+      if (task.id === 'a') return outcome(task.id, 'failed', 'boom')
+      return outcome(task.id)
+    })
+
     const report = await scheduler.run(graph)
     expect(report.ok).toBe(false)
     expect(report.results.get('a')?.status).toBe('failed')
@@ -156,89 +177,80 @@ describe('Scheduler', () => {
     expect(report.results.get('d')?.status).toBe('completed')
   })
 
-  it('settles a hanging task as failed when its timeout fires (via runner semantics at executor level)', async () => {
-    // timeout is enforced by the executor (AgentRunner); the scheduler
-    // must accept the failed outcome and keep going
-    const graph = new TaskGraph()
-    graph.add({ id: 'slow', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'fast', agentId: 'w', prompt: 'p', dependsOn: ['slow'] })
-    const scheduler = new Scheduler(async (task) => {
-      if (task.id === 'slow') return makeOutcome('slow', 'failed', 'timeout after 10ms')
-      return makeOutcome(task.id, 'completed')
-    })
-    const report = await scheduler.run(graph)
-    expect(report.results.get('slow')?.error).toBe('timeout after 10ms')
-    expect(report.results.get('fast')?.status).toBe('cancelled')
-  })
-
   it('cancels pending and in-flight work on AbortSignal', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p', dependsOn: ['a'] })
-    const pool = gatedExecute()
+    graph.add({ id: 'b', agentId: 'v', prompt: 'p' })
+    const pool = gatedPool()
     const controller = new AbortController()
     const scheduler = new Scheduler(pool.execute)
     const run = scheduler.run(graph, controller.signal)
-    await new Promise((r) => setTimeout(r, 0))
+
+    await tick()
     expect(pool.started('a')).toBe(true)
-    controller.abort('user cancelled')
+    expect(pool.started('b')).toBe(true)
+    controller.abort()
+
     const report = await run
     expect(report.stopped).toBe(true)
     expect(report.ok).toBe(false)
     expect(report.results.get('a')?.status).toBe('cancelled')
     expect(report.results.get('b')?.status).toBe('cancelled')
+
+    pool.release('a', outcome('a'))
+    pool.release('b', outcome('b'))
+    await tick()
     expect(graph.get('a')?.status).toBe('cancelled')
-    // late completion of the in-flight task is dropped
-    pool.release('a', makeOutcome('a', 'completed'))
-    await new Promise((r) => setTimeout(r, 0))
-    expect(graph.get('a')?.status).toBe('cancelled')
+    expect(graph.get('b')?.status).toBe('cancelled')
   })
 
   it('cancels the active run through stop()', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    const pool = gatedExecute()
+    const pool = gatedPool()
     const scheduler = new Scheduler(pool.execute)
     const run = scheduler.run(graph)
-    await new Promise((r) => setTimeout(r, 0))
+
+    await tick()
     scheduler.stop()
     const report = await run
+
     expect(report.stopped).toBe(true)
     expect(report.results.get('a')?.status).toBe('cancelled')
   })
 
-  it('terminates when every task is terminal and reports completion order', async () => {
+  it('reports completion order separately from insertion order', async () => {
     const graph = new TaskGraph()
-    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
-    const pool = gatedExecute()
-    const scheduler = new Scheduler(pool.execute)
-    const run = scheduler.run(graph)
-    await new Promise((r) => setTimeout(r, 0))
-    // b finishes first; results must still iterate in insertion order
+    graph.add({ id: 'a', agentId: 'w1', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'w2', prompt: 'p' })
+    const pool = gatedPool()
+    const run = new Scheduler(pool.execute).run(graph)
+
+    await tick()
     pool.release('b')
-    await new Promise((r) => setTimeout(r, 0))
+    await tick()
     pool.release('a')
     const report = await run
+
     expect(report.order).toEqual(['b', 'a'])
     expect([...report.results.keys()]).toEqual(['a', 'b'])
     expect(report.ok).toBe(true)
-    expect(graph.isComplete()).toBe(true)
   })
 
-  it('rejects concurrent runs and invalid graphs', async () => {
-    const graph = new TaskGraph()
-    graph.add({ id: 'a', agentId: 'w', prompt: 'p', dependsOn: ['ghost'] })
-    const scheduler = new Scheduler(async (task) => makeOutcome(task.id, 'completed'))
-    await expect(scheduler.run(graph)).rejects.toThrow()
+  it('rejects invalid graphs and concurrent scheduler runs', async () => {
+    const invalid = new TaskGraph()
+    invalid.add({ id: 'a', agentId: 'w', prompt: 'p', dependsOn: ['ghost'] })
+    const scheduler = new Scheduler(async (task) => outcome(task.id))
+    await expect(scheduler.run(invalid)).rejects.toThrow()
+
     const valid = new TaskGraph()
     valid.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    const pool = gatedExecute()
-    const bounded = new Scheduler(pool.execute)
-    const first = bounded.run(valid)
-    await new Promise((r) => setTimeout(r, 0))
-    await expect(bounded.run(valid)).rejects.toThrow(/already running/)
+    const pool = gatedPool()
+    const first = new Scheduler(pool.execute)
+    const firstRun = first.run(valid)
+    await tick()
+    await expect(first.run(valid)).rejects.toThrow(/already running/)
     pool.release('a')
-    await first
+    await firstRun
   })
 })

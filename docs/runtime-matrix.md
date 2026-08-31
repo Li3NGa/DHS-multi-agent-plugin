@@ -12,7 +12,7 @@ The repository currently ships two runtimes. They share concepts and selected be
 | Supervisor | ✅ | ✅ | Native E1/E2 contract |
 | Planner | ✅ | ✅ | Native Planner V1 is deterministic |
 | Capability Router | ✅ | ✅ | Deterministic V1 |
-| Retry / Recovery | ✅ | ✅ | Native E4 deterministic V1 |
+| Retry / Recovery | ✅ | ✅ | Native E4 deterministic V1, explicit RecoveryManager API |
 | Real DSH Runtime | — | ✅ | Native-only |
 | Debate | ✅ | ⏭️ | Future Native strategy evolution |
 | Consensus | ✅ | ⏭️ | Future Native strategy evolution |
@@ -20,20 +20,26 @@ The repository currently ships two runtimes. They share concepts and selected be
 | MCP stdio adapter | ✅ | ⏭️ | Python-facing surface |
 | CLI | ✅ | ⏭️ | Python-facing surface |
 | Native DSH plugin bundle | — | ✅ | `packages/dsh-multi-agent` |
-| True DAG parallel strategy | ✅ | ⏭️ | Native limitation: current E1 strategy boundary linearizes unsupported DAG shapes |
+| True DAG parallel execution | ✅ | ✅ | R3 direct DAG capability via Scheduler; does not modify frozen Supervisor strategy kinds |
 
 ## Native architecture boundary
 
-Native V1 intentionally supports the verified Strategy Contract:
+Native keeps the verified Supervisor Strategy Contract:
 
 ```text
 Broadcast / Sequential / Relay
 ```
 
-A dependency DAG that cannot be represented by those strategies is deterministically linearized for sequential execution. This means the Planner can represent a DAG while the current Native runtime does not preserve parallelism for every DAG shape. This is a known architecture limitation, not a hidden behavior.
+R3 adds a separate Runtime capability for arbitrary dependency graphs:
 
-Removing that limitation requires a separate Strategy Boundary evolution with new Scheduler concurrency semantics; it is not part of the current production hardening work.
+```text
+Planner -> Validator -> Router -> Scheduler -> AgentRunner -> Real DSH
+```
+
+This path preserves dependency edges and allows independent branches to execute concurrently under the Scheduler's configured concurrency limit. It is exposed through `runDag()` and the Planner integration `planAndRunDag()`.
+
+The direct DAG path deliberately does not redefine `StrategyKind` or mutate the frozen Supervisor V1 contract. Future strategy evolution can build on this capability without breaking the existing Supervisor compatibility boundary.
 
 ## Release interpretation
 
-When a feature is marked `⏭️`, it is not a missing implementation inside the already-validated Native V1 path. It is a deliberate scope boundary and must not be inferred as a regression in the Python runtime.
+When a feature is marked `⏭️`, it is not a missing implementation inside the validated Native path. It is a deliberate scope boundary and must not be inferred as a regression in the Python runtime.

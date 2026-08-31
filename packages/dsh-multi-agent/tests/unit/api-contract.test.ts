@@ -145,7 +145,7 @@ describe('Scheduler contract (§5)', () => {
   it('results iterate in insertion order regardless of completion order', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'v', prompt: 'p' })
     const scheduler = new Scheduler(async (task) => {
       if (task.id === 'a') await new Promise((r) => setTimeout(r, 5))
       return outcome(task.id, 'completed')
@@ -195,7 +195,7 @@ describe('Scheduler contract (§5)', () => {
   it('execute exceptions become failed outcomes, not run aborts', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'bad', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'good', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'good', agentId: 'v', prompt: 'p' })
     const scheduler = new Scheduler(async (task) => {
       if (task.id === 'bad') throw new Error('executor exploded')
       return outcome(task.id, 'completed')

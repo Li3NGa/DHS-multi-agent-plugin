@@ -10,6 +10,7 @@ const requiredPaths = [
   'packages/dsh-multi-agent/package.json',
   'packages/dsh-multi-agent/tsconfig.build.json',
   'cordis.patch.yml',
+  'scripts/patch-native-declarations.mjs',
 ]
 
 for (const required of requiredPaths) {
@@ -50,11 +51,15 @@ for (const directory of sourceRoots) walk(join(rootPath, directory))
 const packageJson = JSON.parse(readFileSync(join(rootPath, 'package.json'), 'utf8'))
 const build = String(packageJson.scripts?.build ?? '')
 const buildJs = String(packageJson.scripts?.['build:js'] ?? '')
+const buildTypes = String(packageJson.scripts?.['build:types'] ?? '')
 if (!buildJs.includes('packages/dsh-multi-agent/src/index.ts')) {
   violations.push('root build:js does not use packages/dsh-multi-agent/src/index.ts')
 }
 if (!build.includes('build:js') || !build.includes('build:types')) {
   violations.push('root build must invoke both build:js and build:types')
+}
+if (!buildTypes.includes('tsconfig.build.json') || !buildTypes.includes('patch-native-declarations.mjs')) {
+  violations.push('root build:types must emit and normalize declaration files')
 }
 if (packageJson.main !== './dist/index.js') {
   violations.push(`root package main must be ./dist/index.js (got ${String(packageJson.main)})`)

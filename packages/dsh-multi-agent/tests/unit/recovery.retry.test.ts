@@ -1,10 +1,10 @@
 /**
- * Phase E4 — Retry Policy (scenarios 3-5, 13).
+ * Retry Policy coverage plus R5 cancellation semantics.
  */
 import { describe, expect, it } from 'vitest'
 import type { TaskExecute, Task } from '../src'
 import { okOutcome } from './helpers'
-import { createRecoveryManager, RetryPolicy } from '../src/recovery'
+import { createRecoveryManager, delay, RetryPolicy } from '../src/recovery'
 import { createSupervisor } from '../src/supervisor'
 
 const PLAN = { tasks: [{ id: 't1', prompt: 'p' }] }
@@ -36,6 +36,13 @@ describe('RetryPolicy', () => {
     expect(policy.canAttempt(1)).toBe(true)
     expect(policy.canAttempt(2)).toBe(true)
     expect(policy.canAttempt(3)).toBe(false)
+  })
+
+  it('R5: abort resolves an in-flight recovery delay immediately', async () => {
+    const controller = new AbortController()
+    const pending = delay(60_000, controller.signal)
+    controller.abort()
+    await expect(pending).resolves.toBeUndefined()
   })
 })
 

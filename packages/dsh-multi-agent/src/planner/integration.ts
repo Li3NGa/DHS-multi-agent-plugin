@@ -1,32 +1,14 @@
 /**
- * Native Planner — Supervisor Integration (Phase E3).
+ * Native Planner — Supervisor Integration (Phase E3/E5 boundary).
  *
- * Maps a validated, agent-routed plan onto the FROZEN SupervisorPlan and
- * wires the end-to-end pipeline:
+ * The original integration maps plans onto the FROZEN Supervisor strategies:
+ * sequential / broadcast / relay. R3 additionally exposes a direct DAG path:
  *
- *   user input
- *     -> PlannerV1          (parse raw plan text)
- *     -> PlanValidator      (structural validation + safe repair)
- *     -> AgentRouter        (explicit > capability > round-robin)
- *     -> SupervisorPlan     (strategy mapping, this module)
- *     -> Supervisor.run     (frozen E2 Supervisor V1)
- *     -> Strategy -> Scheduler -> AgentRunner -> Real DSH
+ *   user input -> Planner -> Validator -> Router -> Scheduler -> AgentRunner
  *
- * Strategy mapping rules (the frozen Supervisor only knows
- * broadcast/sequential/relay, so the integration maps, it never invents a
- * new strategy):
- *   - `sequential` (default): ANY routed DAG — tasks are linearized in
- *     topological order (deterministic: Kahn's algorithm, insertion-order
- *     tie-breaking). Dependency edges are preserved by the linear order.
- *   - `broadcast`: only a fan-out shape — every task independent AND one
- *     distinct prompt for all of them. Duplicate routed agentIds are an
- *     integration error (the Supervisor rejects them).
- *   - `relay`: only a pure refinement chain — exactly one root, every task
- *     has at most one dependency, single path. The first task's prompt
- *     becomes the relay prompt; later prompts become per-step instructions.
- *
- * Anything else raises PlanIntegrationError. The Supervisor itself is never
- * modified or re-implemented here.
+ * This preserves arbitrary dependency edges and therefore permits genuine
+ * parallel execution of independent branches. The Supervisor remains frozen
+ * to its existing three-strategy contract.
  */
 import { PlanIntegrationError } from './errors'
 import { AgentRouter } from './router'
@@ -35,9 +17,13 @@ import { PlanValidator } from './validator'
 import type { Supervisor, SupervisorRunInput } from '../supervisor'
 import type { SupervisorPlan } from '../supervisor/types'
 import type { SequentialStep } from '../strategies/sequential'
+import { runDag } from '../strategies/dag'
+import type { TaskExecute } from '../scheduler'
 import type {
   AgentDescriptor,
+  PlanDagRunOptions,
   PlanExecutionStrategy,
+  PlannedDagExecutionResult,
   PlannedExecutionResult,
   RoutedPlan,
   RoutedTask,
@@ -49,7 +35,6 @@ import type {
  * (no unknown deps / cycles).
  */
 export function topologicalOrder(tasks: readonly RoutedTask[]): RoutedTask[] {
-  const byId = new Map(tasks.map((task) => [task.id, task]))
   const pending = new Map(tasks.map((task) => [task.id, new Set(task.dependsOn ?? [])]))
   const order: RoutedTask[] = []
   const done = new Set<string>()
@@ -73,7 +58,6 @@ export function topologicalOrder(tasks: readonly RoutedTask[]): RoutedTask[] {
   if (order.length < tasks.length) {
     throw new PlanIntegrationError('plan is not a DAG (topological sort stalled)')
   }
-  void byId
   return order
 }
 
@@ -156,8 +140,6 @@ function relayPlan(routed: RoutedPlan): SupervisorPlan {
       }
     }
   }
-  // single path: exactly one root (no deps) and each task is the dep of at
-  // most one other task
   const roots = chain.filter((task) => (task.dependsOn ?? []).length === 0)
   if (roots.length !== 1) {
     throw new PlanIntegrationError(
@@ -226,13 +208,7 @@ export interface PlanRunOptions {
 }
 
 /**
- * End-to-end entry: user input -> Planner -> Validator -> Router ->
- * Supervisor -> Real DSH. Every stage's artifact is returned alongside the
- * final SupervisorRunResult for observability.
- *
- * Errors propagate loudly: PlannerParseError / PlanValidationError /
- * PlanIntegrationError from the planning stages, SupervisorError hierarchy
- * from the execution stage. Nothing is swallowed.
+ * Planner -> Supervisor pipeline for the frozen strategy boundary.
  */
 export async function planAndRun(
   input: string,
@@ -243,10 +219,8 @@ export async function planAndRun(
   const strategy = options.strategy ?? 'sequential'
 
   const planned = await planner.plan(input)
-
   const validator = new PlanValidator({ agents })
   const validated = validator.validateAndRepair(planned.plan)
-
   const router = new AgentRouter({ agents })
   const routed = router.route(validated.plan.tasks)
 
@@ -257,7 +231,6 @@ export async function planAndRun(
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
   })
-
   const result = await supervisor.run(supervisorInput)
 
   return {
@@ -268,6 +241,65 @@ export async function planAndRun(
     strategy,
     supervisorInput,
     result,
+  }
+}
+
+/**
+ * Planner -> Validator -> Router -> Scheduler path that preserves the
+ * original DAG instead of linearizing it through Supervisor V1.
+ */
+export async function planAndRunDag(
+  input: string,
+  execute: TaskExecute,
+  deps: Pick<PlanPipelineDeps, 'planner' | 'agents'>,
+  options: PlanDagRunOptions,
+): Promise<PlannedDagExecutionResult> {
+  const startedAt = Date.now()
+  const planned = await deps.planner.plan(input)
+  const validator = new PlanValidator({ agents: deps.agents })
+  const validated = validator.validateAndRepair(planned.plan)
+  const routed = new AgentRouter({ agents: deps.agents }).route(validated.plan.tasks)
+
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort()
+  if (options.signal?.aborted) controller.abort()
+  else options.signal?.addEventListener('abort', onAbort, { once: true })
+
+  const timer =
+    options.timeoutMs !== undefined && options.timeoutMs > 0
+      ? setTimeout(() => controller.abort(), options.timeoutMs)
+      : undefined
+
+  try {
+    const report = await runDag(
+      execute,
+      routed.tasks.map((task) => ({
+        id: task.id,
+        agentId: task.agentId,
+        prompt: task.prompt,
+        ...(task.dependsOn !== undefined ? { dependsOn: task.dependsOn } : {}),
+        ...(task.timeoutMs !== undefined ? { timeoutMs: task.timeoutMs } : {}),
+        ...(task.metadata !== undefined ? { metadata: task.metadata } : {}),
+      })),
+      {
+        concurrency: options.concurrency,
+        signal: controller.signal,
+      },
+    )
+
+    return {
+      plan: planned.plan,
+      format: planned.format,
+      validated,
+      routed,
+      schedulerReport: report,
+      runId: options.runId,
+      durationMs: Date.now() - startedAt,
+      ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    options.signal?.removeEventListener('abort', onAbort)
   }
 }
 

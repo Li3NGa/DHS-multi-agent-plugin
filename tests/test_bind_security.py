@@ -6,7 +6,6 @@ import pytest
 
 from deepseek_multi_agent_plugin.adapter_server import validate_bind_security
 from deepseek_multi_agent_plugin.adapters.http import is_loopback_bind_host
-from deepseek_multi_agent_plugin.coordinator import AgentCoordinator
 
 
 def test_loopback_hosts_are_safe_without_auth():

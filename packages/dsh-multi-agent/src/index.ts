@@ -14,6 +14,7 @@ import type { SupervisorRunResult } from './supervisor'
 import { createRecoveryManager, type RecoveryManager } from './recovery'
 import type { AgentDescriptor, PlannerPlan } from './planner'
 import type { RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult } from './recovery'
+import { observe, taskFinished, taskStarted, type RuntimeObserver } from './observability'
 
 export const inject = ['agents']
 export const DEFAULT_TIMEOUT_MS = 60_000
@@ -23,6 +24,8 @@ export interface PluginConfig {
   readonly defaultTimeoutMs?: number | undefined
   /** Default recovery policy for `runWithRecovery` / `recoveryManager`. */
   readonly recovery?: RecoveryPolicyOptions | undefined
+  /** Optional privacy-preserving runtime event sink. Observer failures are ignored. */
+  readonly observability?: RuntimeObserver | undefined
 }
 
 export interface RecoveryRunApiOptions extends RecoveryRunOptions {
@@ -47,7 +50,12 @@ export interface MultiAgentApi {
 
 export function apply(ctx: DshContext, config: PluginConfig = {}): void {
   const runner = new AgentRunner(ctx, { defaultTimeoutMs: config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS })
-  const execute: TaskExecute = (task, signal) => runner.run(task, signal)
+  const execute: TaskExecute = async (task, signal) => {
+    observe(config.observability, taskStarted(task))
+    const outcome = await runner.run(task, signal)
+    observe(config.observability, taskFinished(task, outcome))
+    return outcome
+  }
 
   const makeRecoveryManager = (
     agents: readonly AgentDescriptor[],
@@ -56,6 +64,7 @@ export function apply(ctx: DshContext, config: PluginConfig = {}): void {
     supervisor: createSupervisor({ execute }),
     agents,
     ...(policy !== undefined ? { policy } : config.recovery !== undefined ? { policy: config.recovery } : {}),
+    ...(config.observability !== undefined ? { observer: config.observability } : {}),
   })
 
   const api: MultiAgentApi = {
@@ -108,3 +117,8 @@ export type {
   RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult, PlanRepair, RepairRecord,
   AssignmentRepairResult, ReplanRule, ReplanInput, ReplanResult, RecoveryManagerDeps,
 } from './recovery'
+
+export {
+  MetricsCollector, createMetricsCollector, observe, taskStarted, taskFinished,
+} from './observability'
+export type { ObservabilityEvent, RuntimeObserver, MetricsSnapshot } from './observability'

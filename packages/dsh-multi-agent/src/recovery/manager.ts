@@ -8,6 +8,7 @@
 import { AgentRouter, PlanValidator, planToSupervisorInput, topologicalOrder } from '../planner'
 import type { AgentDescriptor, PlannerPlan, PlanExecutionStrategy, RoutedPlan, RoutedTask } from '../planner/types'
 import type { Supervisor, SupervisorRunResult } from '../supervisor'
+import { observe, type RuntimeObserver } from '../observability'
 import type {
   FailureRecord,
   RecoveryDecision,
@@ -28,6 +29,8 @@ export interface RecoveryManagerDeps {
   readonly agents: readonly AgentDescriptor[]
   /** Finite retry/replan budget (defaults: 3 attempts / 2 replans). */
   readonly policy?: RecoveryPolicyOptions
+  /** Optional privacy-preserving lifecycle observer. */
+  readonly observer?: RuntimeObserver
 }
 
 /**
@@ -86,11 +89,13 @@ export class RecoveryManager {
   readonly #supervisor: Supervisor
   readonly #agents: readonly AgentDescriptor[]
   readonly #policy: RetryPolicy
+  readonly #observer: RuntimeObserver | undefined
 
   constructor(deps: RecoveryManagerDeps) {
     this.#supervisor = deps.supervisor
     this.#agents = deps.agents
     this.#policy = new RetryPolicy(deps.policy)
+    this.#observer = deps.observer
   }
 
   /** Recovery budget in effect (for observability / tests). */
@@ -104,23 +109,55 @@ export class RecoveryManager {
    * replan after cancellation is observed.
    */
   async run(plan: PlannerPlan, options: RecoveryRunOptions): Promise<RecoveryRunResult> {
+    const startedAt = Date.now()
     const decisions: RecoveryDecision[] = []
     const failures: FailureRecord[] = []
     let currentPlan = plan
-    // per-run pool: AGENT_UNAVAILABLE repairs evict the failed agent from it
     let pool = this.#agents
     let attempts = 0
     let repairsUsed = 0
     let replansUsed = 0
     let lastResult: SupervisorRunResult | undefined
     const strategy = options.strategy ?? 'sequential'
+    const logicalPlanId = planId(plan)
+
+    observe(this.#observer, {
+      type: 'recovery.started',
+      at: new Date().toISOString(),
+      runId: options.runId,
+      planId: logicalPlanId,
+    })
+
+    const recordDecision = (decision: RecoveryDecision): void => {
+      decisions.push(decision)
+      observe(this.#observer, {
+        type: 'recovery.decision',
+        at: new Date().toISOString(),
+        runId: options.runId,
+        attempt: attempts,
+        decision,
+      })
+    }
+
+    const recordFailure = (failure: FailureRecord): void => {
+      failures.push(failure)
+      observe(this.#observer, {
+        type: 'recovery.failure',
+        at: new Date().toISOString(),
+        runId: options.runId,
+        attempt: failure.attempt,
+        code: failure.code,
+        taskId: failure.taskId,
+        agentId: failure.agentId,
+      })
+    }
 
     const finish = (
       status: RecoveryRunResult['status'],
       decision: RecoveryDecision,
     ): RecoveryRunResult => {
-      decisions.push(decision)
-      return {
+      recordDecision(decision)
+      const result = {
         runId: options.runId,
         status,
         attempts,
@@ -129,11 +166,21 @@ export class RecoveryManager {
         failures,
         decisions,
         lastResult,
-      }
+      } satisfies RecoveryRunResult
+      observe(this.#observer, {
+        type: 'recovery.finished',
+        at: new Date().toISOString(),
+        runId: options.runId,
+        status,
+        attempts,
+        repairsUsed,
+        replansUsed,
+        durationMs: Date.now() - startedAt,
+      })
+      return result
     }
 
     while (true) {
-      // cancellation protection: checked before every dispatch and decision
       if (options.signal?.aborted) return finish('cancelled', 'abort')
 
       if (!this.#policy.canAttempt(attempts + 1)) {
@@ -142,28 +189,31 @@ export class RecoveryManager {
       }
       attempts += 1
       const attempt = attempts
+      observe(this.#observer, {
+        type: 'recovery.attempt',
+        at: new Date().toISOString(),
+        runId: options.runId,
+        attempt,
+      })
 
-      // ---- validate -------------------------------------------------------
       let validatedPlan: PlannerPlan
       try {
         const validator = new PlanValidator({ agents: pool })
         validatedPlan = validator.validateAndRepair(currentPlan).plan
       } catch (error) {
-        failures.push(classifyThrown(error, attempt))
+        recordFailure(classifyThrown(error, attempt))
         return finish('failed', 'failed')
       }
 
-      // ---- route ----------------------------------------------------------
       let routed: RoutedPlan
       try {
         routed = new AgentRouter({ agents: pool }).route(validatedPlan.tasks)
       } catch (error) {
-        failures.push(classifyThrown(error, attempt))
+        recordFailure(classifyThrown(error, attempt))
         return finish('failed', 'failed')
       }
 
-      const completedIds =
-        lastResult !== undefined ? extractCompletedTaskIds(lastResult) : []
+      const completedIds = lastResult !== undefined ? extractCompletedTaskIds(lastResult) : []
       const lastFailure = failures[failures.length - 1]
       const context: RecoveryExecutionContext = {
         runId: options.runId,
@@ -176,7 +226,6 @@ export class RecoveryManager {
       }
       void context
 
-      // ---- execute one legal Supervisor run ------------------------------
       let result: SupervisorRunResult
       try {
         result = await this.#supervisor.run(
@@ -190,14 +239,12 @@ export class RecoveryManager {
         )
       } catch (error) {
         const failure = classifyThrown(error, attempt)
-        failures.push(failure)
+        recordFailure(failure)
         if (options.signal?.aborted || failure.code === 'CANCELLED') {
           return finish('cancelled', 'abort')
         }
-        // Thrown TIMEOUTs follow the exact same retry policy as returned
-        // timeout results; recovery must not depend on error transport shape.
         if (failure.recoverability.retryable && this.#policy.canAttempt(attempt + 1)) {
-          decisions.push('retry')
+          recordDecision('retry')
           await delay(this.#policy.delayMs, options.signal)
           continue
         }
@@ -210,14 +257,13 @@ export class RecoveryManager {
       }
 
       const failure = classifyResult(result, attempt)
-      failures.push(failure)
+      recordFailure(failure)
 
-      // ---- deterministic decision (phase-contract order) -----------------
       if (options.signal?.aborted || failure.code === 'CANCELLED') {
         return finish('cancelled', 'abort')
       }
       if (failure.recoverability.retryable && this.#policy.canAttempt(attempt + 1)) {
-        decisions.push('retry')
+        recordDecision('retry')
         await delay(this.#policy.delayMs, options.signal)
         continue
       }
@@ -231,15 +277,13 @@ export class RecoveryManager {
         )
         if (repair.ok) {
           currentPlan = repair.plan
-          // re-route guarantee: the dead agent cannot be picked again
           if (failure.agentId !== undefined) {
             pool = pool.filter((agent) => agent.id !== failure.agentId)
           }
           repairsUsed += 1
-          decisions.push('repair')
+          recordDecision('repair')
           continue
         }
-        // nothing clearable: fall through to replan / failed
       }
       if (failure.recoverability.replanable && this.#policy.canReplan(replansUsed)) {
         const mappedTaskFailures = failure.taskFailures?.map((ref) => ({
@@ -254,7 +298,7 @@ export class RecoveryManager {
         if (replanned.ok) {
           currentPlan = replanned.plan
           replansUsed += 1
-          decisions.push('replan')
+          recordDecision('replan')
           continue
         }
       }

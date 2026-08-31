@@ -51,6 +51,7 @@ describe('Recovery decision loop', () => {
             text: undefined,
             error: `agent '${task.agentId}' not found`,
             durationMs: 1,
+            raw: undefined,
           }
         : okOutcome(task.id)
     const manager = createRecoveryManager({
@@ -165,6 +166,7 @@ describe('Recovery decision loop', () => {
             text: undefined,
             error: "agent 'dead' not found",
             durationMs: 1,
+            raw: undefined,
           }
         : okOutcome(task.id)
     const manager = createRecoveryManager({

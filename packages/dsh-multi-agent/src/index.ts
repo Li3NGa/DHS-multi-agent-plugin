@@ -22,7 +22,6 @@ export const DEFAULT_TIMEOUT_MS = 60_000
 export interface PluginConfig {
   readonly concurrency?: number | undefined
   readonly defaultTimeoutMs?: number | undefined
-  /** Default recovery policy for `runWithRecovery` / `recoveryManager`. */
   readonly recovery?: RecoveryPolicyOptions | undefined
   /** Optional observer for bounded lifecycle telemetry. */
   readonly observer?: OrchestrationObserver | undefined
@@ -55,7 +54,7 @@ export function apply(ctx: DshContext, config: PluginConfig = {}): void {
     runSequential: (steps, options) => runSequential(execute, steps, { concurrency: config.concurrency, ...options }),
     runRelay: (options) => runRelay(execute, { concurrency: config.concurrency, ...options }),
     runBroadcast: (options) => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
-    runDag: (tasks, options) => runDag(execute, tasks, { concurrency: config.concurrency, ...options }),
+    runDag: (tasks, options) => runDag(execute, tasks, { concurrency: config.concurrency, observer: config.observer, ...options }),
     recoveryManager: (agents, policy) => makeRecoveryManager(agents, policy),
     runWithRecovery: (plan, options) => {
       const { agents, recovery, ...runOptions } = options

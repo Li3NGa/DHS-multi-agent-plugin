@@ -50,6 +50,26 @@ jobs:
         run: pnpm --dir packages/dsh-multi-agent build
       - name: Build root release entry + real-DSH smoke
         run: pnpm test:smoke
+      - name: Clean consumer package smoke
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          pnpm pack --pack-destination "$tmp_dir"
+          archive="$(find "$tmp_dir" -maxdepth 1 -type f -name 'dhs-multi-agent-*.tgz' -print -quit)"
+          test -n "$archive"
+          mkdir "$tmp_dir/consumer"
+          cd "$tmp_dir/consumer"
+          pnpm init
+          pnpm add "$archive"
+          node --input-type=module <<'NODE'
+          const mod = await import('dhs-multi-agent')
+          const required = ['apply', 'AgentRunner', 'Scheduler', 'runDag', 'createSupervisor', 'createRecoveryManager']
+          for (const key of required) {
+            if (!(key in mod)) throw new Error(`missing public export: ${key}`)
+          }
+          console.log(`consumer import OK: ${required.join(', ')}`)
+          NODE
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-release-artifacts

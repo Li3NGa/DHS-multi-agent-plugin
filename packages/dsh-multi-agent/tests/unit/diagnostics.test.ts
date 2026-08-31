@@ -21,7 +21,7 @@ describe('production diagnostics', () => {
     expect(diagnostics.health().status).toBe('unhealthy')
   })
 
-  it('builds a failure chain without retaining payloads', () => {
+  it('builds and completes a failure chain without retaining payloads', () => {
     const metrics = createMetricsCollector()
     const diagnostics = createRuntimeDiagnostics({ metrics })
     const observer = diagnostics.observer()
@@ -29,10 +29,14 @@ describe('production diagnostics', () => {
     observer({ type: 'recovery.attempt', at: '2026-09-01T00:00:01.000Z', runId: 'run-1', attempt: 1 })
     observer({ type: 'recovery.failure', at: '2026-09-01T00:00:02.000Z', runId: 'run-1', attempt: 1, code: 'TIMEOUT', taskId: 'task-1', agentId: 'agent-1' })
     observer({ type: 'recovery.decision', at: '2026-09-01T00:00:03.000Z', runId: 'run-1', attempt: 1, decision: 'retry' })
+    observer({ type: 'recovery.finished', at: '2026-09-01T00:00:04.000Z', runId: 'run-1', status: 'succeeded', attempts: 2, repairsUsed: 0, replansUsed: 0 })
     const run = diagnostics.inspect('run-1')!
-    expect(run.status).toBe('running')
+    expect(run.status).toBe('succeeded')
+    expect(run.attempts).toBe(2)
+    expect(run.failureCount).toBe(1)
     expect(run.failures[0]).toMatchObject({ code: 'TIMEOUT', taskId: 'task-1' })
     expect(run.decisions).toEqual(['retry'])
+    expect(run.finishedAt).toBe('2026-09-01T00:00:04.000Z')
     expect(run).not.toHaveProperty('input')
     expect(run).not.toHaveProperty('metadata')
   })

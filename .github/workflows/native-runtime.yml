@@ -95,7 +95,7 @@ jobs:
           }
           void outcome
           TS
-          pnpm exec tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,ESNext.Disposable types-smoke.ts
+          pnpm exec tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM,ESNext.Disposable types-smoke.ts
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-release-artifacts

@@ -57,12 +57,12 @@ export type {
 export {
   PlannerError, PlanParseError, PlanValidationError, PlanRoutingError, PlanIntegrationError, isPlannerError,
   PlannerV1, createPlanner, parsePlanText, PlanValidator, createPlanValidator, AgentRouter, createAgentRouter,
-  topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, createPlanPipeline,
+  topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, planAndRunDag, createPlanPipeline,
 } from './planner'
 export type {
   AgentDescriptor, PlanTask, PlannerPlan, PlanFormat, PlanSource, PlannerResult, PlanIssue, PlanIssueSeverity,
   ValidatedPlan, RouteAssignment, RoutedTask, RoutedPlan, PlanExecutionStrategy, PlannedExecutionResult,
-  PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions,
+  PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions, PlanDagRunOptions, PlannedDagExecutionResult,
 } from './planner'
 
 export {

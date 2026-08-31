@@ -125,7 +125,9 @@ class Scheduler {
 语义（冻结）：
 - **依赖序**：依赖全部 `completed` 才启动；`failed`/`cancelled` 依赖 →
   依赖者记 `cancelled`，error 为 `dependency '<id>' <status>`。
-- **并发**：in-flight ≤ `concurrency`；启动顺序 = 插入序。
+- **并发**：in-flight ≤ `concurrency`；启动顺序 = 插入序；**同一
+  `agentId` 同时最多一个 in-flight task**，不同 agent 仍可按全局 concurrency
+  并行。这样保持 DSH 单 live turn/session stream 的事件相关性确定。
 - **确定性结果序**：`results` Map 迭代序恒为插入序（与完成序无关）。
 - **取消**：外部 signal 中止或 `stop()` → pending/in-flight 全部
   `cancelled`；在途 promise 迟到结果被丢弃；`run()` 正常 resolve（带
@@ -249,3 +251,38 @@ interface StrategyReport {
 - **timeout / cancellation**：策略不自建任何定时器或取消机制，全部经
   §5/§9/§10 的 Runtime 语义（signal 透传 Scheduler；timeout 由
   AgentRunner 结算为 `failed` + `timeout:` 前缀错误）。
+
+## 14. Additive R4 Recovery API
+
+R4 不修改上述冻结 Runtime core 语义，只在高层增加 recovery orchestration。
+Recovery 仍位于 Supervisor 之外，不直接接触 DSH Session / `session.events`。
+
+```ts
+interface MultiAgentApi {
+  recoveryManager(
+    agents: readonly AgentDescriptor[],
+    policy?: RecoveryPolicyOptions,
+  ): RecoveryManager
+
+  runWithRecovery(
+    plan: PlannerPlan,
+    options: RecoveryRunApiOptions,
+  ): Promise<RecoveryRunResult>
+}
+
+interface RecoveryRunApiOptions extends RecoveryRunOptions {
+  agents: readonly AgentDescriptor[]
+  recovery?: RecoveryPolicyOptions
+}
+```
+
+语义：
+- 每次执行都重新建立 `Supervisor`，RecoveryManager 只调用冻结的
+  Supervisor V1；不会把 recovery 状态写进 Supervisor。
+- `maxAttempts` / `maxReplans` 均有界；默认值来自 `RetryPolicy`（3 / 2）。
+- `TIMEOUT` 可在 attempt budget 内 retry；`AGENT_UNAVAILABLE` 可通过
+  clear assignment + run-local agent eviction 修复并 reroute；dependency
+  failure 可 deterministic replan；`CANCELLED` 立即终止，不 retry / repair /
+  replan。
+- `PluginConfig.recovery` 是默认 policy；`runWithRecovery(...,
+  { recovery })` 可逐次覆盖。

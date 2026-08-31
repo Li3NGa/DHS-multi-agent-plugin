@@ -30,10 +30,14 @@ on:
       - "cordis.patch.yml"
       - ".github/workflows/native-runtime.yml"
 
+permissions:
+  contents: read
+
 jobs:
   native-runtime:
     name: Native runtime (typecheck / unit / build / real-DSH smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Enable pnpm

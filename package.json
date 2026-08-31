@@ -18,7 +18,7 @@
     "test": "pnpm --dir packages/dsh-multi-agent test",
     "typecheck": "pnpm --dir packages/dsh-multi-agent typecheck",
     "build:js": "esbuild packages/dsh-multi-agent/src/index.ts --bundle --format=esm --outfile=dist/index.js --sourcemap --external:@deepseek-ai/*",
-    "build:types": "tsc -p packages/dsh-multi-agent/tsconfig.build.json",
+    "build:types": "pnpm --dir packages/dsh-multi-agent exec tsc -p tsconfig.build.json",
     "build": "pnpm run build:js && pnpm run build:types",
     "prepare": "pnpm run build",
     "prepack": "pnpm run build",
@@ -32,8 +32,7 @@
     "@deepseek-ai/dsh-session": "0.1.1-rc.2"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
-    "typescript": "^5.8.0"
+    "esbuild": "^0.25.0"
   },
   "repository": {
     "type": "git",

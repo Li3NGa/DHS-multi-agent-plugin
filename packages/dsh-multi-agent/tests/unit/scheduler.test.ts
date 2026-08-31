@@ -138,6 +138,38 @@ describe('Scheduler', () => {
     expect(peak).toBe(2)
   })
 
+  it('serializes ready tasks targeting the same agent while preserving cross-agent parallelism', async () => {
+    const graph = new TaskGraph()
+    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'c', agentId: 'v', prompt: 'p' })
+    const pool = gatedExecute()
+    const events: string[] = []
+    const scheduler = new Scheduler((task, signal) => {
+      events.push(`start:${task.id}`)
+      return pool.execute(task, signal)
+    }, { concurrency: 2 })
+    const run = scheduler.run(graph)
+
+    await new Promise((r) => setTimeout(r, 0))
+    expect(events).toEqual(['start:a', 'start:c'])
+    expect(pool.started('b')).toBe(false)
+
+    pool.release('c')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(events).toEqual(['start:a', 'start:c'])
+    expect(pool.started('b')).toBe(false)
+
+    pool.release('a')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(events).toEqual(['start:a', 'start:c', 'start:b'])
+    expect(pool.started('b')).toBe(true)
+
+    pool.release('b')
+    const report = await run
+    expect(report.ok).toBe(true)
+  })
+
   it('propagates task failure to dependents as cancelled', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })

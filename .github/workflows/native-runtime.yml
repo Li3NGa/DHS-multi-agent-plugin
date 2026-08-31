@@ -10,6 +10,7 @@ on:
     branches: [main, master]
     paths:
       - "packages/dsh-multi-agent/**"
+      - "scripts/check-native-source.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -18,6 +19,7 @@ on:
   pull_request:
     paths:
       - "packages/dsh-multi-agent/**"
+      - "scripts/check-native-source.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -38,6 +40,8 @@ jobs:
           cache: pnpm
       - name: Install workspace (frozen)
         run: pnpm install --frozen-lockfile
+      - name: Native source-of-truth guard
+        run: node scripts/check-native-source.mjs
       - name: Typecheck
         run: pnpm --dir packages/dsh-multi-agent typecheck
       - name: Unit tests

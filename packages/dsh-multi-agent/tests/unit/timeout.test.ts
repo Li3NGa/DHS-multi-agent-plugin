@@ -7,7 +7,7 @@ const planner = {
     plan: { tasks: [{ id: 'a', prompt: 'p' }] },
     format: 'json' as const,
   }),
-} as PlannerV1
+} as unknown as PlannerV1
 
 const execute: TaskExecute = async () => {
   throw new Error('execute should not be called for invalid timeout')
@@ -25,7 +25,7 @@ describe('run-level timeout validation', () => {
           plannerCalls += 1
           return planner.plan('p')
         },
-      } as PlannerV1
+      } as unknown as PlannerV1
 
       await expect(
         planAndRunDag('p', execute, { planner: guardedPlanner, agents }, {

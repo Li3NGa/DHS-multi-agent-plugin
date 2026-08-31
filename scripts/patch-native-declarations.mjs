@@ -1,7 +1,8 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const root = new URL('../dist/types/', import.meta.url)
+const root = fileURLToPath(new URL('../dist/types/', import.meta.url))
 
 async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {

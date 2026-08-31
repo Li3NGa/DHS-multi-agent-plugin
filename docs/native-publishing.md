@@ -12,6 +12,7 @@ Python 包 `deepseek-multi-agent-plugin` 继续使用现有的 PyPI 发布流程
 - 标签必须与 `package.json.version` 完全一致
 - 发布工作流：`.github/workflows/npm-publish.yml`
 - 发布前必须通过 Native Runtime CI
+- **R6 只负责把发布链工程化到可发布状态，不自动创建版本 tag，不绕过 npm 侧 Trusted Publishing 配置。**
 
 ## 产物契约
 

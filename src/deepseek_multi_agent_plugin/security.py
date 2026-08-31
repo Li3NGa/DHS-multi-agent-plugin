@@ -41,10 +41,18 @@ class TokenAuthenticator:
         unknown = set(roles) - set(ROLE_LEVELS)
         if unknown:
             raise ValueError(f"unknown roles: {sorted(unknown)} (known: {sorted(ROLE_LEVELS)})")
+        seen_tokens: Dict[str, str] = {}
         for role, token in roles.items():
             # 空 token 会把认证降级为“任意空 Bearer 都能通过”，直接拒绝。
             if not isinstance(token, str) or not token.strip():
                 raise ValueError(f"empty token for role {role!r}")
+            prior_role = seen_tokens.get(token)
+            if prior_role is not None and prior_role != role:
+                # 一个 token 同时拥有高低两个角色时，Python dict 的插入顺序
+                # 会决定最终权限，这会造成隐式的权限漂移；直接拒绝歧义配置。
+                raise ValueError(
+                    f"token reused across roles {prior_role!r} and {role!r}")
+            seen_tokens[token] = role
         self._by_token = {token: role for role, token in roles.items()}
 
     def authenticate(self, authorization: str) -> Optional[str]:

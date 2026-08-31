@@ -11,6 +11,7 @@ on:
     paths:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
+      - "scripts/check-npm-release.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -20,6 +21,7 @@ on:
     paths:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
+      - "scripts/check-npm-release.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -70,9 +72,24 @@ jobs:
           }
           console.log(`consumer import OK: ${required.join(', ')}`)
           NODE
+          pnpm add -D typescript@5.8.2
+          cat > types-smoke.ts <<'TS'
+          import { Task, type TaskOutcome, type TaskSpec } from 'dhs-multi-agent'
+
+          const spec: TaskSpec = { id: 'type-smoke', agentId: 'agent', prompt: 'hello' }
+          const task = new Task(spec)
+          const outcome: TaskOutcome = {
+            taskId: task.id,
+            status: 'completed',
+            durationMs: 1,
+          }
+          void outcome
+          TS
+          pnpm exec tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 types-smoke.ts
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-release-artifacts
           path: |
             dist/index.js
+            dist/types/index.d.ts
             packages/dsh-multi-agent/dist/dsh.bundle.js

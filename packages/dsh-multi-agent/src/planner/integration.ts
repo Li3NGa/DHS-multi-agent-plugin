@@ -19,6 +19,7 @@ import type { SupervisorPlan } from '../supervisor/types'
 import type { SequentialStep } from '../strategies/sequential'
 import { runDag } from '../strategies/dag'
 import type { TaskExecute } from '../scheduler'
+import { validateTimeoutMs } from '../timeout'
 import type {
   AgentDescriptor,
   PlanDagRunOptions,
@@ -255,6 +256,7 @@ export async function planAndRunDag(
   options: PlanDagRunOptions,
 ): Promise<PlannedDagExecutionResult> {
   const startedAt = Date.now()
+  validateTimeoutMs(options.timeoutMs)
   const planned = await deps.planner.plan(input)
   const validator = new PlanValidator({ agents: deps.agents })
   const validated = validator.validateAndRepair(planned.plan)
@@ -266,7 +268,7 @@ export async function planAndRunDag(
   else options.signal?.addEventListener('abort', onAbort, { once: true })
 
   const timer =
-    options.timeoutMs !== undefined && options.timeoutMs > 0
+    options.timeoutMs !== undefined
       ? setTimeout(() => controller.abort(), options.timeoutMs)
       : undefined
 

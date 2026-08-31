@@ -1,30 +1,12 @@
 /**
- * Native Recovery — Phase E4 RecoveryManager.
+ * Native Recovery — deterministic RecoveryManager.
  *
- * Owns the deterministic failure decision loop; the frozen Supervisor keeps
- * executing exactly one legal run per attempt and never learns about
- * recovery:
- *
- *   for each attempt:
- *     validate(currentPlan) -> route -> Supervisor.run
- *     on success            -> completed
- *     on failure            -> classify
- *       cancelled           -> abort (never retried / repaired / replanned)
- *       retryable + budget  -> retry same plan
- *       repairable          -> Repairer -> validate -> route -> execute
- *       replanable + budget -> Replanner -> validate -> route -> execute
- *       otherwise           -> failed, full failure chain preserved
- *
- * Every candidate plan (repaired or replanned) re-enters the pipeline at
- * Validation — an unvalidated plan is never executed.
- *
- * Re-route semantics (AGENT_UNAVAILABLE): the Repair layer clears the dead
- * explicit assignment AND the failed agent leaves THIS RUN's routable pool,
- * so the Router cannot deterministically pick it again. The caller-supplied
- * default pool is never mutated across runs.
+ * The frozen Supervisor keeps executing exactly one legal run per attempt;
+ * Recovery owns the bounded failure decision loop outside the Supervisor.
+ * Every repaired or replanned candidate re-enters validation before routing.
  */
-import { AgentRouter, PlanValidator, planToSupervisorInput } from '../planner'
-import type { AgentDescriptor, PlannerPlan } from '../planner/types'
+import { AgentRouter, PlanValidator, planToSupervisorInput, topologicalOrder } from '../planner'
+import type { AgentDescriptor, PlannerPlan, PlanExecutionStrategy, RoutedPlan, RoutedTask } from '../planner/types'
 import type { Supervisor, SupervisorRunResult } from '../supervisor'
 import type {
   FailureRecord,
@@ -49,18 +31,33 @@ export interface RecoveryManagerDeps {
 }
 
 /**
- * Map strategy-level task ids (seq-N / bc-N / turn-N / relay-N) back to
- * PlannerPlan ids by position — strategies rename tasks when building the
- * graph, so recovery decisions must translate before touching the plan.
+ * Return the exact routed-task order used by the selected Supervisor strategy.
+ * Sequential and relay strategies topologically linearize the routed DAG before
+ * assigning synthetic strategy ids; broadcast preserves declaration order.
+ */
+function strategyTaskOrder(
+  routed: RoutedPlan,
+  strategy: PlanExecutionStrategy,
+): readonly RoutedTask[] {
+  return strategy === 'broadcast' ? routed.tasks : topologicalOrder(routed.tasks)
+}
+
+/**
+ * Map synthetic strategy ids back to Planner ids using the SAME ordered task
+ * list that produced those synthetic ids. This prevents recovery from applying
+ * a failure to the wrong Planner task when declaration order differs from
+ * topological execution order.
  */
 function strategyIdToPlanId(
   strategyTaskIds: readonly string[],
-  routed: { readonly tasks: readonly { readonly id: string }[] },
+  routed: RoutedPlan,
+  strategy: PlanExecutionStrategy,
 ): string[] {
+  const ordered = strategyTaskOrder(routed, strategy)
   return strategyTaskIds.map((strategyTaskId) => {
     const match = /^(?:seq|bc|turn|relay)-(\d+)$/.exec(strategyTaskId)
     const index = match !== null ? Number(match[1]) : -1
-    return (index >= 0 ? routed.tasks[index]?.id : undefined) ?? strategyTaskId
+    return (index >= 0 ? ordered[index]?.id : undefined) ?? strategyTaskId
   })
 }
 
@@ -116,6 +113,7 @@ export class RecoveryManager {
     let repairsUsed = 0
     let replansUsed = 0
     let lastResult: SupervisorRunResult | undefined
+    const strategy = options.strategy ?? 'sequential'
 
     const finish = (
       status: RecoveryRunResult['status'],
@@ -145,7 +143,7 @@ export class RecoveryManager {
       attempts += 1
       const attempt = attempts
 
-      // ---- validate (+ delegate safe repairs to the Repair layer) --------
+      // ---- validate -------------------------------------------------------
       let validatedPlan: PlannerPlan
       try {
         const validator = new PlanValidator({ agents: pool })
@@ -155,8 +153,8 @@ export class RecoveryManager {
         return finish('failed', 'failed')
       }
 
-      // ---- route ---------------------------------------------------------
-      let routed
+      // ---- route ----------------------------------------------------------
+      let routed: RoutedPlan
       try {
         routed = new AgentRouter({ agents: pool }).route(validatedPlan.tasks)
       } catch (error) {
@@ -182,7 +180,7 @@ export class RecoveryManager {
       let result: SupervisorRunResult
       try {
         result = await this.#supervisor.run(
-          planToSupervisorInput(routed, options.strategy ?? 'sequential', {
+          planToSupervisorInput(routed, strategy, {
             runId: options.runId,
             input: options.input,
             ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
@@ -193,8 +191,17 @@ export class RecoveryManager {
       } catch (error) {
         const failure = classifyThrown(error, attempt)
         failures.push(failure)
-        const terminal = this.#decide(failure, options)
-        return finish(terminal.status, terminal.decision)
+        if (options.signal?.aborted || failure.code === 'CANCELLED') {
+          return finish('cancelled', 'abort')
+        }
+        // Thrown TIMEOUTs follow the exact same retry policy as returned
+        // timeout results; recovery must not depend on error transport shape.
+        if (failure.recoverability.retryable && this.#policy.canAttempt(attempt + 1)) {
+          decisions.push('retry')
+          await delay(this.#policy.delayMs, options.signal)
+          continue
+        }
+        return finish(failure.code === 'TIMEOUT' ? 'timeout' : 'failed', 'failed')
       }
 
       lastResult = result
@@ -211,7 +218,7 @@ export class RecoveryManager {
       }
       if (failure.recoverability.retryable && this.#policy.canAttempt(attempt + 1)) {
         decisions.push('retry')
-        await delay(this.#policy.delayMs)
+        await delay(this.#policy.delayMs, options.signal)
         continue
       }
       if (failure.recoverability.repairable) {
@@ -220,7 +227,7 @@ export class RecoveryManager {
           .map((ref) => ref.taskId)
         const repair = clearAgentAssignments(
           currentPlan,
-          strategyIdToPlanId(strategyIds, routed),
+          strategyIdToPlanId(strategyIds, routed, strategy),
         )
         if (repair.ok) {
           currentPlan = repair.plan
@@ -237,7 +244,7 @@ export class RecoveryManager {
       if (failure.recoverability.replanable && this.#policy.canReplan(replansUsed)) {
         const mappedTaskFailures = failure.taskFailures?.map((ref) => ({
           ...ref,
-          taskId: strategyIdToPlanId([ref.taskId], routed)[0]!,
+          taskId: strategyIdToPlanId([ref.taskId], routed, strategy)[0]!,
         }))
         const replanFailure: FailureRecord = {
           ...failure,
@@ -253,18 +260,6 @@ export class RecoveryManager {
       }
       return finish(failure.code === 'TIMEOUT' ? 'timeout' : 'failed', 'failed')
     }
-  }
-
-  /** Terminal mapping for thrown failures (never auto-recovers them). */
-  #decide(
-    failure: FailureRecord,
-    options: RecoveryRunOptions,
-  ): { decision: RecoveryDecision; status: RecoveryRunResult['status'] } {
-    if (options.signal?.aborted || failure.code === 'CANCELLED') {
-      return { decision: 'abort', status: 'cancelled' }
-    }
-    if (failure.code === 'TIMEOUT') return { decision: 'failed', status: 'timeout' }
-    return { decision: 'failed', status: 'failed' }
   }
 }
 

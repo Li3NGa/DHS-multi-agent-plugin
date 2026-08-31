@@ -1,11 +1,12 @@
 /**
- * Phase E4 — RecoveryManager decision loop (scenarios 13-17).
+ * RecoveryManager decision loop plus R5 cross-layer regression coverage.
  */
 import { describe, expect, it } from 'vitest'
 import type { TaskExecute, Task } from '../../src'
 import { okOutcome, scriptedExecute } from './helpers'
 import { createRecoveryManager } from '../../src/recovery'
-import { createSupervisor } from '../../src/supervisor'
+import { createSupervisor, SupervisorTimeoutError } from '../../src/supervisor'
+import { runSequential } from '../../src/strategies/sequential'
 
 const AGENTS = [{ id: 'x', capabilities: [] }, { id: 'y', capabilities: [] }]
 
@@ -154,5 +155,103 @@ describe('Recovery decision loop', () => {
     expect(result.failures[0]?.code).toBe('TASK_ERROR')
     expect(result.failures[0]?.taskFailures?.some((ref) => ref.message === 'kaboom')).toBe(true)
     expect(result.attempts).toBe(1)
+  })
+
+  it('R5: recovery maps reordered topological strategy ids to the correct Planner tasks', async () => {
+    const execute: TaskExecute = async (task: Task) =>
+      task.agentId === 'dead'
+        ? {
+            taskId: task.id,
+            status: 'failed' as const,
+            text: undefined,
+            error: "agent 'dead' not found",
+            durationMs: 1,
+            raw: undefined,
+          }
+        : okOutcome(task.id)
+    const manager = createRecoveryManager({
+      supervisor: createSupervisor({ execute }),
+      agents: [
+        { id: 'dead', capabilities: [] },
+        { id: 'live-a', capabilities: [] },
+        { id: 'live-b', capabilities: [] },
+      ],
+      policy: { maxAttempts: 3 },
+    })
+
+    const result = await manager.run(
+      {
+        tasks: [
+          { id: 'b', agentId: 'dead', prompt: 'B', dependsOn: ['a'] },
+          { id: 'a', agentId: 'live-a', prompt: 'A' },
+        ],
+      },
+      { runId: 'r5-reordered', input: 'p' },
+    )
+
+    expect(result.status).toBe('completed')
+    expect(result.repairsUsed).toBe(1)
+    expect(result.decisions).toEqual(['repair', 'completed'])
+    expect(result.lastResult?.report.strategy).toBe('sequential')
+    if (result.lastResult?.report.strategy === 'sequential') {
+      // Topological execution is A -> B. A's explicit live-a assignment must
+      // survive recovery; the dead assignment belongs to Planner task B.
+      expect(result.lastResult.report.report.steps[0]?.agentId).toBe('live-a')
+    }
+  })
+
+  it('R5: thrown Supervisor timeout follows the normal retry policy', async () => {
+    let calls = 0
+    const execute: TaskExecute = async (task) => okOutcome(task.id)
+    const supervisor = createSupervisor({
+      execute,
+      strategies: {
+        sequential: async (runExecute, steps, options) => {
+          calls += 1
+          if (calls === 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 30))
+            throw new Error('forced strategy failure after timeout')
+          }
+          return runSequential(runExecute, steps, options)
+        },
+      },
+    })
+    const manager = createRecoveryManager({
+      supervisor,
+      agents: [{ id: 'x', capabilities: [] }],
+      policy: { maxAttempts: 2 },
+    })
+
+    const result = await manager.run(
+      { tasks: [{ id: 'a', prompt: 'p' }] },
+      { runId: 'r5-timeout', input: 'p', timeoutMs: 10 },
+    )
+
+    expect(result.status).toBe('completed')
+    expect(result.attempts).toBe(2)
+    expect(result.decisions).toEqual(['retry', 'completed'])
+    expect(result.failures[0]?.code).toBe('TIMEOUT')
+    expect(result.failures[0]?.cause).toBeInstanceOf(SupervisorTimeoutError)
+  })
+
+  it('R5: invalid run-level timeout is rejected before dispatch', async () => {
+    let calls = 0
+    const execute: TaskExecute = async (task) => {
+      calls += 1
+      return okOutcome(task.id)
+    }
+    const manager = createRecoveryManager({
+      supervisor: createSupervisor({ execute }),
+      agents: [{ id: 'x', capabilities: [] }],
+    })
+
+    const result = await manager.run(
+      { tasks: [{ id: 'a', prompt: 'p' }] },
+      { runId: 'r5-invalid-timeout', input: 'p', timeoutMs: 0 },
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.failures[0]?.code).toBe('VALIDATION_ERROR')
+    expect(calls).toBe(0)
   })
 })

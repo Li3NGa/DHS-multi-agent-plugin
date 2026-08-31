@@ -1,11 +1,10 @@
 /**
- * Native Recovery — Phase E4 minimal Retry Policy.
+ * Native Recovery — minimal bounded Retry Policy.
  *
  * Finite by construction: `maxAttempts` is a positive integer (default 3)
  * and every dispatch is guarded by canAttempt(). Infinite retry is
  * impossible without bypassing this class. V1 keeps delay deterministic and
- * zero by default; no exponential backoff, no persistence, no background
- * workers (phase contract).
+ * zero by default; no exponential backoff, persistence or background workers.
  */
 import type { RecoveryPolicyOptions } from './types'
 
@@ -56,8 +55,26 @@ export class RetryPolicy {
   }
 }
 
-/** Deterministic bounded wait; resolves immediately when ms <= 0. */
-export function delay(ms: number): Promise<void> {
-  if (ms <= 0) return Promise.resolve()
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+/**
+ * Deterministic bounded wait. A caller abort resolves the wait immediately;
+ * the RecoveryManager checks the signal before the next dispatch and exits
+ * without consuming another attempt.
+ */
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const finish = (): void => {
+      cleanup()
+      resolve()
+    }
+    const onAbort = (): void => finish()
+    timer = setTimeout(finish, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) finish()
+  })
 }

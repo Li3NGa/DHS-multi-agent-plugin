@@ -1,50 +1,66 @@
-# Phase B 迁移映射：dsh-native/ → packages/dsh-multi-agent/
+# Native Source Convergence Map
 
-Source of Truth 迁移的唯一权威映射（行为零变化，只移动与改路径）。
+The migration from `dsh-native/` to `packages/dsh-multi-agent/` is complete for the production Native source tree.
 
-## 文件映射
+## Authoritative mapping
 
-| dsh-native/ | packages/dsh-multi-agent/ | 变化 |
+| Historical tree | Production tree | Current role |
 |---|---|---|
-| `src/**`（task/graph/dsh/runner/scheduler/index/strategies） | `src/**` | 无（字节不变） |
-| `tests/*.test.ts` + `tests/helpers.ts` | `tests/unit/` | 导入 `../src` → `../../src` |
-| `smoke/dsh.smoke.spec.ts`（源码级真实 runtime） | `tests/integration/dsh.runtime.spec.ts` | 导入路径调整（真实 DSH runtime、源码级） |
-| `smoke/dsh.bundle.spec.ts`（bundle 产物级） | `tests/smoke/dsh.bundle.spec.ts` | `../dist` → `../../dist`、`../src` → `../../src` |
-| `smoke/support.ts` | `tests/smoke/support.ts` | 无 |
-| （新增） | `tests/smoke/root-entry.smoke.spec.ts` | 真实 harness 加载 **根 dist/index.js**（`dsh plugin add` 的实际入口） |
-| `vitest.config.ts` | 同位置 | include → `tests/unit/**` |
-| `vitest.smoke.config.ts` | 同位置 | include → `tests/smoke/**` + `tests/integration/**` |
-| `tsconfig.json` | 同位置 | include → `["src","tests","vitest.config.ts","vitest.smoke.config.ts"]` |
-| `package.json` | 同位置 | +`private:true`；`test:smoke` 改用 pnpm；其余不变（依赖仍 0.1.1-rc.2 线） |
-| `pnpm-workspace.yaml` | **删除**（并入根 workspace） | workspace 成员不得自有 workspace 文件；设置合并至根 |
-| `pnpm-lock.yaml` | **删除** | 单一根 workspace lockfile |
-| `.gitignore` / `README.md` / `cordis.patch.yml.example` | 同位置 | 无 |
-| `dist/`（ignored 构建产物） | `dist/` | esbuild 重建 |
+| `dsh-native/src/**` | `packages/dsh-multi-agent/src/**` | Legacy verification snapshot → production source |
+| `dsh-native/tests/**` | `packages/dsh-multi-agent/tests/unit/**` | Historical tests → package unit tests |
+| `dsh-native/smoke/dsh.smoke.spec.ts` | `packages/dsh-multi-agent/tests/integration/dsh.runtime.spec.ts` | Real-DSH integration coverage |
+| `dsh-native/smoke/dsh.bundle.spec.ts` | `packages/dsh-multi-agent/tests/smoke/dsh.bundle.spec.ts` | Bundle artifact coverage |
+| `dsh-native/smoke/planner.smoke.spec.ts` | `packages/dsh-multi-agent/tests/smoke/planner.smoke.spec.ts` | Planner + real DSH coverage |
+| `dsh-native/smoke/e4-recovery.smoke.spec.ts` | `packages/dsh-multi-agent/tests/smoke/e4-recovery.smoke.spec.ts` | Recovery + real DSH coverage |
+| `dsh-native/smoke/support.ts` | `packages/dsh-multi-agent/tests/smoke/support.ts` | Smoke harness support |
 
-## 根发布壳（用户入口不变）
+## Production path
 
-| 项 | 迁移后 | 说明 |
-|---|---|---|
-| `name` / `main: dist/index.js` / `exports` / `files: [dist]` / `dsh.bundle` manifest / `cordis.patch.yml` | **不变** | `dsh plugin add pnpm` 安装模型逐字保留 |
-| `prepare` | `tsc` → `pnpm run build` | build 改为 esbuild 从 `packages/dsh-multi-agent/src/index.ts` 打包出 `dist/index.js`（`@deepseek-ai/*` external，宿主提供） |
-| `pnpm-workspace.yaml` | +`packages: ['packages/*']` +合并成员设置 | 根成为 workspace；成员 devDeps 在插件安装流程中随 install 就绪 |
-| `dependencies` | 不变（0.1.1-rc.2 线四包） | 宿主/安装环境运行时解析 |
-| `typecheck` / `test` | 过渡期仍指向根 src/tests；退役提交后委托给包 | 见下 |
+Native production code is built only from:
 
-## Root Native（transitional）退役判据
+```text
+packages/dsh-multi-agent/src/index.ts
+```
 
-`src/index.ts`、`src/runner.ts`、`tests/plugin.spec.ts`、根 `tsconfig.json`/`vitest.config.ts`
-在以下全部确认后由独立 chore 提交删除（快照 tag `dhs-root-native-final` 保底）：
+The repository root builds the installable release entry from that package source into:
 
-- [ ] 根 `build`/`prepare` 产物来自 packages（esbuild），不含根 src
-- [ ] 根 `exports`/`main` 指向的 dist 与根 src 无关
-- [ ] runtime（真实 DSH smoke + root-entry smoke）只经 packages 与根 dist
-- [ ] 过渡 CI job 只测根 src 自身，迁移后删除
-- [ ] 根 `typecheck`/`test` 委托给 packages/dsh-multi-agent
+```text
+dist/index.js
+```
 
-## CI 映射
+The package itself builds:
 
-`dsh-native.yml` → `native-runtime.yml`：从根 workspace 运行
-（`pnpm install --frozen-lockfile` → 成员 typecheck/test → 根 build → `test:smoke`
-含 bundle/config-agent/root-entry），paths 过滤改为
-`packages/dsh-multi-agent/**` + 根发布壳文件。
+```text
+packages/dsh-multi-agent/dist/dsh.bundle.js
+```
+
+The authoritative Native workflow is:
+
+```text
+.github/workflows/native-runtime.yml
+```
+
+The former independent `dsh-native` workflow has been retired. This prevents two TypeScript CI signals from testing different copies of the Native implementation.
+
+## Legacy snapshot
+
+`dsh-native/` remains in the repository only until the final retirement gate is intentionally executed. The historical state is protected by:
+
+```text
+dhs-root-native-final
+```
+
+No new production code should be added under `dsh-native/`.
+
+## Final retirement gate
+
+Before deleting the legacy tree, verify all of the following on a clean checkout:
+
+- production build does not read `dsh-native/`
+- package tests do not import `dsh-native/`
+- Native CI references only `packages/dsh-multi-agent/`
+- root release entry is produced from the package source
+- real-DSH bundle and root-entry smoke pass without the legacy tree
+- package tarball/install succeeds without the legacy tree
+
+Deleting the legacy tree is a repository hygiene change, not a runtime redesign.

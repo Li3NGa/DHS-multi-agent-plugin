@@ -6,8 +6,8 @@ import type { DshAgentHandle, DshContext, UserMessage } from '../../src/dsh'
 /**
  * Unit-level runner tests over fake agents that follow the REAL DSH API
  * shape: followup() is void, results come from session.events, cancel()
- * stops the turn. The real-harness verification lives in dsh-native/smoke
- * (real AgentLoop + real sessions + scripted LLM adapter).
+ * stops the turn. Real-harness verification lives in the package smoke
+ * and integration suites.
  */
 
 interface ScriptedTurn {

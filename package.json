@@ -19,7 +19,7 @@
     "test": "pnpm --dir packages/dsh-multi-agent test",
     "typecheck": "pnpm --dir packages/dsh-multi-agent typecheck",
     "build:js": "esbuild packages/dsh-multi-agent/src/index.ts --bundle --format=esm --outfile=dist/index.js --sourcemap --external:@deepseek-ai/*",
-    "build:types": "pnpm --dir packages/dsh-multi-agent exec tsc -p tsconfig.build.json",
+    "build:types": "pnpm --dir packages/dsh-multi-agent exec tsc -p tsconfig.build.json && node scripts/patch-native-declarations.mjs",
     "build": "pnpm run build:js && pnpm run build:types",
     "prepare": "pnpm run build",
     "prepack": "pnpm run build",

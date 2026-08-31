@@ -11,6 +11,11 @@
  *   dependent (outcome `cancelled`, error names the dependency)
  * - configurable concurrency (default unlimited; launch order is graph
  *   insertion order)
+ * - per-agent serialization: at most one task for a given `agentId` is in
+ *   flight at a time. DSH agents own a single live turn/session stream;
+ *   allowing concurrent followups on one agent would make session-event
+ *   correlation ambiguous and can merge two task outputs. Different agents
+ *   may still execute in parallel up to the global concurrency limit.
  * - deterministic result ordering: the returned map iterates in graph
  *   insertion order regardless of completion order; `order` records the
  *   actual completion sequence
@@ -80,6 +85,7 @@ export class Scheduler {
     const outcomes = new Map<string, TaskOutcome>()
     const order: string[] = []
     const running = new Set<string>()
+    const busyAgents = new Set<string>()
     let wake: (() => void) | undefined
 
     controller.signal.addEventListener(
@@ -92,6 +98,7 @@ export class Scheduler {
       // a task cancelled by stop() while in flight drops its late result
       if (task.status !== 'running') {
         running.delete(task.id)
+        busyAgents.delete(task.agentId)
         wake?.()
         return
       }
@@ -99,12 +106,14 @@ export class Scheduler {
       outcomes.set(task.id, outcome)
       order.push(task.id)
       running.delete(task.id)
+      busyAgents.delete(task.agentId)
       wake?.()
     }
 
     const start = (task: Task): void => {
       task.status = 'running'
       running.add(task.id)
+      busyAgents.add(task.agentId)
       void this.#execute(task, controller.signal).then(
         (outcome) => settle(task, outcome),
         (error) =>
@@ -156,10 +165,13 @@ export class Scheduler {
           }
         }
 
-        // 2) launch ready tasks in insertion order, bounded by concurrency
+        // 2) launch ready tasks in insertion order, bounded by concurrency.
+        // Tasks sharing an agent are treated as a single execution slot;
+        // tasks targeting other agents remain eligible for parallel launch.
         if (!stoppedNow()) {
           for (const task of graph.ready()) {
             if (running.size >= this.#concurrency) break
+            if (busyAgents.has(task.agentId)) continue
             task.status = 'ready'
             start(task)
           }
@@ -187,8 +199,9 @@ export class Scheduler {
         for (const task of graph.tasks()) {
           if (task.isTerminal) continue
           const wasRunning = task.status === 'running'
-          cancelBlocked(task, wasRunning ? 'cancelled (run stopped)' : 'cancelled (run stopped)')
+          cancelBlocked(task, 'cancelled (run stopped)')
           running.delete(task.id)
+          if (wasRunning) busyAgents.delete(task.agentId)
         }
       }
     } finally {

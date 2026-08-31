@@ -64,11 +64,11 @@ describe('Scheduler', () => {
     expect(graph.get('only')?.status).toBe('completed')
   })
 
-  it('runs independent tasks in parallel', async () => {
+  it('runs independent tasks on different agents in parallel', async () => {
     const graph = new TaskGraph()
-    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'c', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'a', agentId: 'w1', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'w2', prompt: 'p' })
+    graph.add({ id: 'c', agentId: 'w3', prompt: 'p' })
     const pool = gatedExecute()
     const scheduler = new Scheduler(pool.execute)
     const run = scheduler.run(graph)
@@ -109,7 +109,7 @@ describe('Scheduler', () => {
 
   it('caps in-flight tasks at the configured concurrency', async () => {
     const graph = new TaskGraph()
-    for (let i = 0; i < 6; i += 1) graph.add({ id: `t${i}`, agentId: 'w', prompt: 'p' })
+    for (let i = 0; i < 6; i += 1) graph.add({ id: `t${i}`, agentId: `w${i}`, prompt: 'p' })
     let inflight = 0
     let peak = 0
     const pool = gatedExecute()
@@ -242,7 +242,7 @@ describe('Scheduler', () => {
   it('terminates when every task is terminal and reports completion order', async () => {
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
-    graph.add({ id: 'b', agentId: 'w', prompt: 'p' })
+    graph.add({ id: 'b', agentId: 'v', prompt: 'p' })
     const pool = gatedExecute()
     const scheduler = new Scheduler(pool.execute)
     const run = scheduler.run(graph)
@@ -258,7 +258,7 @@ describe('Scheduler', () => {
     expect(graph.isComplete()).toBe(true)
   })
 
-  it('rejects concurrent runs and invalid graphs', async () => {
+  it('rejects concurrent runs and invalid graphs', async () =>
     const graph = new TaskGraph()
     graph.add({ id: 'a', agentId: 'w', prompt: 'p', dependsOn: ['ghost'] })
     const scheduler = new Scheduler(async (task) => makeOutcome(task.id, 'completed'))

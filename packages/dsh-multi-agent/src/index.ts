@@ -14,7 +14,7 @@ import type { SupervisorRunResult } from './supervisor'
 import { createRecoveryManager, type RecoveryManager } from './recovery'
 import type { AgentDescriptor, PlannerPlan } from './planner'
 import type { RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult } from './recovery'
-import { observe, taskFinished, taskStarted, type MetricsCollector, type RuntimeObserver } from './observability'
+import { observe, taskFinished, taskStarted, type RuntimeObserver } from './observability'
 
 export const inject = ['agents']
 export const DEFAULT_TIMEOUT_MS = 60_000
@@ -122,5 +122,3 @@ export {
   MetricsCollector, createMetricsCollector, observe, taskStarted, taskFinished,
 } from './observability'
 export type { ObservabilityEvent, RuntimeObserver, MetricsSnapshot } from './observability'
-
-export type { MetricsCollector as RuntimeMetrics } from './observability'

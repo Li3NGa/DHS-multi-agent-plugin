@@ -35,6 +35,7 @@ The server uses only the Python standard library. Example:
        -d '{"type": "run", "prompt": "你好", "strategy": "debate", "rounds": 1}'
 """
 import argparse
+import ipaddress
 import json
 import logging
 import os
@@ -80,6 +81,47 @@ def _content_length(headers) -> int:
     if length < 0:
         raise ValueError("invalid Content-Length")
     return length
+
+
+def is_loopback_bind_host(host: str) -> bool:
+    """Return True only for hosts that are unambiguously loopback/local.
+
+    Hostnames other than ``localhost`` are deliberately treated as remote:
+    DNS resolution can change independently of the process, so a hostname
+    cannot safely bypass the remote-authentication guard.
+    """
+    value = host.strip().lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_bind_security(
+    host: str,
+    *,
+    token: Optional[str] = None,
+    roles: Optional[Dict[str, str]] = None,
+    allow_insecure_remote: bool = False,
+) -> None:
+    """Reject unauthenticated non-loopback binds unless explicitly opted in."""
+    if is_loopback_bind_host(host):
+        return
+    if token or roles:
+        return
+    if allow_insecure_remote:
+        log.warning(
+            "insecure remote HTTP bind explicitly allowed on %s; configure bearer auth for production",
+            host,
+        )
+        return
+    raise ValueError(
+        f"refusing unauthenticated remote HTTP bind on {host!r}; "
+        "configure --token/--role (or DS_AGENT_ROLES), or explicitly pass "
+        "--allow-insecure-remote for trusted/private networks"
+    )
 
 
 class AdapterHTTPServer(ThreadingHTTPServer):
@@ -364,14 +406,23 @@ def build_server(
     max_sessions: Optional[int] = None,
     max_concurrent_runs: int = 4,
     adapter_kwargs: Optional[Dict[str, Any]] = None,
+    allow_insecure_remote: bool = False,
 ) -> ThreadingHTTPServer:
     """Create a configured adapter server without starting it.
 
     Exposed separately so tests and embedders can attach an already-running
     server (e.g. to verify graceful shutdown without blocking a thread).
     ``roles`` maps role name -> token; ``token`` alone is shorthand for one
-    admin token. Neither means open local mode.
+    admin token. Loopback binds may remain unauthenticated for local use.
+    Remote binds require authentication unless ``allow_insecure_remote`` is
+    explicitly enabled for a trusted/private network.
     """
+    validate_bind_security(
+        host,
+        token=token,
+        roles=roles,
+        allow_insecure_remote=allow_insecure_remote,
+    )
     server = AdapterHTTPServer((host, port), AdapterHandler)
     # Hung agent calls must not keep the container alive forever during
     # graceful shutdown; daemon threads let ``server_close`` return promptly.
@@ -409,6 +460,7 @@ def serve(
     max_sessions: Optional[int] = None,
     max_concurrent_runs: int = 4,
     adapter_kwargs: Optional[Dict[str, Any]] = None,
+    allow_insecure_remote: bool = False,
 ) -> None:
     server = build_server(
         host, port, coordinator,
@@ -422,6 +474,7 @@ def serve(
         max_sessions=max_sessions,
         max_concurrent_runs=max_concurrent_runs,
         adapter_kwargs=adapter_kwargs,
+        allow_insecure_remote=allow_insecure_remote,
     )
     auth = "roles" if roles else ("token" if token else "off")
     log.info("adapter server listening on http://%s:%s (agents: %s, auth: %s, sessions: %s)",
@@ -484,6 +537,8 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
     parser.add_argument("--role", action="append", default=[], metavar="ROLE:TOKEN",
                         help="map a bearer token to a role (readonly/user/operator/admin); "
                              "repeatable, overrides --token")
+    parser.add_argument("--allow-insecure-remote", action="store_true",
+                        help="allow an unauthenticated non-loopback bind (trusted/private networks only)")
     parser.add_argument("--history", default=os.environ.get("DS_HISTORY_FILE"),
                         help="run history JSONL file (default: $DS_HISTORY_FILE; unset = disabled)")
     parser.add_argument("--history-prompt-limit", type=int, default=None,
@@ -542,6 +597,7 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> None:
           session_ttl=args.session_ttl,
           max_sessions=args.max_sessions,
           max_concurrent_runs=args.max_runs,
+          allow_insecure_remote=args.allow_insecure_remote,
           adapter_kwargs={"allowed_register_kinds": sorted(allowed_register_kinds)})
 
 

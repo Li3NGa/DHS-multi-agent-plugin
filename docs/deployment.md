@@ -11,6 +11,10 @@
 `/status`、`/run`、`/runs`、`/history`、`/sessions`、`/register` 等端点
 （完整列表与角色要求见 [HTTP 服务接口](http_api.md)）。
 
+**R8 安全默认值：** loopback（`127.0.0.1` / `::1` / `localhost`）可在没有鉴权的情况下运行；
+任何非 loopback 监听地址都必须配置 `--token` / `--role` / `DS_AGENT_ROLES`，否则服务拒绝启动。
+仅在明确的可信私有网络场景中，才能使用 `--allow-insecure-remote` 显式关闭这一保护。
+
 ---
 
 ## 1. Windows 本机部署
@@ -31,7 +35,7 @@ cd C:\path\to\deepseek-multi-agent-plugin
   `%LOCALAPPDATA%\deepseek-multi-agent-plugin\token.txt`；
 - 后台隐藏窗口启动服务，PID 写入仓库根目录 `.server.pid`；
 - 默认只监听 `127.0.0.1`；需要局域网访问时用
-  `-HostBind 0.0.0.0`（务必配合 token 鉴权）。
+  `-HostBind 0.0.0.0`，并确保传递鉴权 token。
 
 验证：
 
@@ -65,18 +69,19 @@ schtasks /End /TN "DeepSeekMultiAgent"
 
 ```bash
 export DEEPSEEK_API_KEY=sk-xxxxxx
-export DS_AGENT_TOKEN=$(openssl rand -hex 16)   # 可选，强烈建议设置
+export DS_AGENT_TOKEN=$(openssl rand -hex 16)   # 对外监听时必需
 ```
 
 ### 2.2 环境变量
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `HOST` | `0.0.0.0` | 容器内监听地址 |
+| `HOST` | `0.0.0.0` | 容器内监听地址；这是非 loopback 地址，因此必须配置 token/RBAC |
 | `PORT` | `8000` | 容器内监听端口 |
-| `CONFIG` | `/app/example_config.yaml` | 配置文件路径 |
+| `CONFIG` | `/app/example_config.yaml` | YAML/JSON agent 配置路径 |
 | `DEEPSEEK_API_KEY` | 无 | DeepSeek API Key（LLM Agent 必需） |
-| `DS_AGENT_TOKEN` | 无 | Bearer 鉴权 token（对外开放时必须设置） |
+| `DS_AGENT_TOKEN` | 无 | Bearer 鉴权 token；`HOST=0.0.0.0` 时必须设置 |
+| `DS_AGENT_ROLES` | 无 | JSON RBAC，例如 `{"readonly":"ro-token","admin":"admin-token"}` |
 
 ### 2.3 启动
 
@@ -85,8 +90,8 @@ docker compose up -d --build
 docker compose ps
 ```
 
-服务会监听宿主机 `8000` 端口，配置从宿主机
-`./example_config.yaml` 挂载进容器（只读），替换成你自己的团队配置即可。
+服务会监听宿主机 `8000` 端口。因为容器默认监听 `0.0.0.0`，启动前必须提供
+`DS_AGENT_TOKEN` 或 `DS_AGENT_ROLES`；未提供时服务会 fail-closed 并拒绝启动。
 
 ### 2.4 健康检查与日志
 
@@ -100,9 +105,10 @@ curl -s http://127.0.0.1:8000/health \
 ### 2.5 优雅停止 / 更新
 
 ```bash
-docker compose stop               # 发送 SIGTERM，服务优雅关闭
-docker compose down               # 停止并删除容器
-docker compose up -d --build      # 更新镜像后重启
+docker compose stop                 # 发送 SIGTERM，服务优雅关闭
+docker compose down                 # 停止并删除容器
+docker compose up -d --build         # 更新镜像后重启
+docker compose ps
 ```
 
 容器收到 `SIGTERM` 后会停止接收新请求、等待正在执行的任务返回，再关闭
@@ -162,6 +168,9 @@ sudo systemctl enable --now deepseek-multi-agent
 sudo systemctl status deepseek-multi-agent
 ```
 
+如果 systemd 单元改为监听 `0.0.0.0` 或其他远程地址，必须保留 `DS_AGENT_TOKEN`
+或 `DS_AGENT_ROLES`；否则 R8 安全门禁会在服务启动阶段拒绝绑定。
+
 ---
 
 ## 4. 安全建议
@@ -170,8 +179,11 @@ sudo systemctl status deepseek-multi-agent
   或分角色令牌（`DS_AGENT_ROLES` 传 JSON 对象 `{role: token}`，或重复 `--role ROLE:TOKEN`）；
 - 角色层级 readonly < user < operator < admin，端点按最低角色鉴权（见
   [HTTP 服务接口](http_api.md) 第 2 节）；
+- 服务默认对非 loopback HTTP 监听地址 fail-closed；生产公网/局域网部署应配置鉴权，
+  不要依赖 `--allow-insecure-remote`；
+- `--allow-insecure-remote` 仅用于明确可信的私有网络、测试网或已由外层网络 ACL 完整保护的场景；
 - 服务本身不提供 TLS，公网部署务必放在反向代理（Nginx / Caddy）后面；
-- 监听地址默认 `127.0.0.1`，跨机调用时再开放 `0.0.0.0`；
+- 监听地址默认 `127.0.0.1`，跨机调用时再开放远程地址；
 - 只要服务对外可访问，就必须配置令牌鉴权（`Authorization: Bearer <token>`）；
 - `DEEPSEEK_API_KEY` 通过环境变量或密钥管理注入，不要写进镜像 / 仓库；
 - 长期运行的服务建议设置 `--session-ttl` 与 `--max-sessions`，防止会话内存增长；
@@ -181,9 +193,10 @@ sudo systemctl status deepseek-multi-agent
 
 ## 5. 常见问题
 
-**Q: 容器健康检查一直 unhealthy？**
+**Q: Docker 容器一启动就退出？**
 
-检查 `docker compose logs`；常见原因是 `DS_AGENT_TOKEN` 不一致，或 8000 端口被宿主机占用。
+如果容器使用默认 `HOST=0.0.0.0`，首先检查是否提供了 `DS_AGENT_TOKEN` 或 `DS_AGENT_ROLES`。
+R8 会在无鉴权的远程监听场景直接拒绝启动，这是预期行为。
 
 **Q: 调用 `/run` 返回 401？**
 
@@ -191,4 +204,5 @@ sudo systemctl status deepseek-multi-agent
 
 **Q: systemd 启动后立刻退出？**
 
-用 `journalctl -u deepseek-multi-agent -e` 看日志；多半是 venv 路径或配置文件路径写错。
+用 `journalctl -u deepseek-multi-agent -e` 看日志；如果把 `--host` 配成了非 loopback 地址，
+确认同时设置了 `DS_AGENT_TOKEN` / `DS_AGENT_ROLES`。

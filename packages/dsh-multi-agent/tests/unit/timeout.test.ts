@@ -56,7 +56,7 @@ describe('run-level timeout validation', () => {
       timeoutMs: 1_000,
     })
 
-    expect(result.report.ok).toBe(true)
+    expect(result.schedulerReport.ok).toBe(true)
     expect(executeCalls).toBe(1)
   })
 })

@@ -51,7 +51,6 @@ describe('Recovery decision loop', () => {
             text: undefined,
             error: `agent '${task.agentId}' not found`,
             durationMs: 1,
-            raw: undefined,
           }
         : okOutcome(task.id)
     const manager = createRecoveryManager({
@@ -166,7 +165,6 @@ describe('Recovery decision loop', () => {
             text: undefined,
             error: "agent 'dead' not found",
             durationMs: 1,
-            raw: undefined,
           }
         : okOutcome(task.id)
     const manager = createRecoveryManager({
@@ -209,7 +207,7 @@ describe('Recovery decision loop', () => {
         sequential: async (runExecute, steps, options) => {
           calls += 1
           if (calls === 1) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 15))
+            await new Promise<void>((resolve) => setTimeout(resolve, 30))
             throw new Error('forced strategy failure after timeout')
           }
           return runSequential(runExecute, steps, options)
@@ -224,7 +222,7 @@ describe('Recovery decision loop', () => {
 
     const result = await manager.run(
       { tasks: [{ id: 'a', prompt: 'p' }] },
-      { runId: 'r5-timeout', input: 'p', timeoutMs: 1 },
+      { runId: 'r5-timeout', input: 'p', timeoutMs: 10 },
     )
 
     expect(result.status).toBe('completed')

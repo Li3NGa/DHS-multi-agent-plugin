@@ -1,7 +1,7 @@
 /**
- * DSH API ports — CALIBRATED against the real DeepSeek Harness packages
- * (@deepseek-ai/dsh-agent 0.1.0-rc.6, dsh-session, dsh-llm, cordis 4.0.1;
- * verified in dsh-native/smoke against the real runtime).
+ * DSH API ports — calibrated against the DeepSeek Harness package surface
+ * used by the verified Native smoke suite (Cordis 4.0.1 and the unified
+ * 0.1.1-rc.2 DSH package line).
  *
  * Only the surface this runtime uses is declared; the real Agent satisfies
  * these structural types. Key real-API facts this port encodes:

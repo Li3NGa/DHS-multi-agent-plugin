@@ -15,6 +15,9 @@
     "dist",
     "cordis.patch.yml"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "pnpm --dir packages/dsh-multi-agent test",
     "typecheck": "pnpm --dir packages/dsh-multi-agent typecheck",

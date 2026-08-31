@@ -68,6 +68,18 @@ input
   -> Scheduler
   -> AgentRunner
   -> Real DSH
+
+Recovered Supervisor path:
+plan
+  -> RecoveryManager
+  -> validate
+  -> route
+  -> Supervisor
+  -> Strategy
+  -> Scheduler
+  -> AgentRunner
+  -> Real DSH
+  -> retry / repair / replan / abort (bounded)
 ```
 
 ## Development
@@ -98,6 +110,22 @@ Native V1 keeps the verified Supervisor Strategy Contract:
 
 R3 adds a **direct DAG execution capability** through `runDag()` and `planAndRunDag()`. Arbitrary dependency graphs are preserved and executed by the existing Scheduler, so independent branches may run concurrently instead of being forced into a topological linearization.
 
+R4 exposes the already-verified **RecoveryManager** through the plugin API:
+
+```ts
+const result = await ctx.multiAgent.runWithRecovery(plan, {
+  runId: 'run-1',
+  input: 'user intent',
+  agents: [
+    { id: 'researcher', capabilities: ['research'] },
+    { id: 'writer', capabilities: ['writing'] },
+  ],
+  recovery: { maxAttempts: 3, maxReplans: 2 },
+})
+```
+
+Recovery is deterministic and bounded. `TIMEOUT` can retry within the attempt budget; `AGENT_UNAVAILABLE` can repair by clearing the dead explicit assignment and evicting that agent from the run-local routing pool; dependency failures can trigger deterministic replanning; cancellation never triggers recovery. The RecoveryManager itself remains separate from Supervisor V1.
+
 The direct DAG path deliberately does not extend `StrategyKind` or modify the frozen Supervisor V1 contract. This keeps the Supervisor compatibility boundary stable while exposing the Runtime's actual DAG capability.
 
-No LLM Planner, database, dashboard, Debate or Consensus implementation is part of the current Native production path.
+No database, dashboard, Debate or Consensus implementation is part of the current Native production path.

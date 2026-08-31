@@ -24,6 +24,7 @@ import { runBroadcast, type BroadcastOptions, type BroadcastReport } from '../st
 import { runRelay, type RelayOptions, type RelayReport } from '../strategies/relay'
 import { runSequential, type SequentialOptions, type SequentialReport } from '../strategies/sequential'
 import type { TaskExecute } from '../scheduler'
+import { validateTimeoutMs } from '../timeout'
 import {
   SupervisorCancellationError,
   SupervisorError,
@@ -84,6 +85,11 @@ export function validateSupervisorInput(input: SupervisorRunInput): SupervisorPl
   }
   if (input.plan === null || typeof input.plan !== 'object') {
     throw new SupervisorValidationError('plan is required', { state })
+  }
+  try {
+    validateTimeoutMs(input.timeoutMs)
+  } catch (error) {
+    throw new SupervisorValidationError((error as Error).message, { state, cause: error })
   }
   const plan = input.plan
   try {
@@ -245,7 +251,7 @@ export class Supervisor {
       }
     }
     const timer =
-      input.timeoutMs !== undefined && input.timeoutMs > 0
+      input.timeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true
             controller.abort()

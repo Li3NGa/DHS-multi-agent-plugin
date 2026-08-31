@@ -1,25 +1,33 @@
 {
   "name": "dhs-multi-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Native DeepSeek Harness multi-agent Cordis plugin",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "cordis.patch.yml"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "pnpm --dir packages/dsh-multi-agent test",
     "typecheck": "pnpm --dir packages/dsh-multi-agent typecheck",
-    "build": "esbuild packages/dsh-multi-agent/src/index.ts --bundle --format=esm --outfile=dist/index.js --sourcemap --external:@deepseek-ai/*",
+    "build:js": "esbuild packages/dsh-multi-agent/src/index.ts --bundle --format=esm --outfile=dist/index.js --sourcemap --external:@deepseek-ai/*",
+    "build:types": "pnpm --dir packages/dsh-multi-agent exec tsc -p tsconfig.build.json && node scripts/patch-native-declarations.mjs",
+    "build": "pnpm run build:js && pnpm run build:types",
     "prepare": "pnpm run build",
-    "test:smoke": "pnpm run build && pnpm --dir packages/dsh-multi-agent run test:smoke"
+    "prepack": "pnpm run build",
+    "test:smoke": "pnpm run build && pnpm --dir packages/dsh-multi-agent run test:smoke",
+    "release:check": "node scripts/check-npm-release.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -29,6 +37,26 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Li3NGa/DHS-multi-agent-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Li3NGa/DHS-multi-agent-plugin/issues"
+  },
+  "homepage": "https://github.com/Li3NGa/DHS-multi-agent-plugin#readme",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "multi-agent",
+    "orchestration",
+    "cordis"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.14.0"
   },
   "dsh": {
     "bundle": {

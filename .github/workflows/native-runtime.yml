@@ -11,6 +11,8 @@ on:
     paths:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
+      - "scripts/check-npm-release.mjs"
+      - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -20,6 +22,8 @@ on:
     paths:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
+      - "scripts/check-npm-release.mjs"
+      - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -50,6 +54,8 @@ jobs:
         run: pnpm --dir packages/dsh-multi-agent build
       - name: Build root release entry + real-DSH smoke
         run: pnpm test:smoke
+      - name: Validate release metadata
+        run: pnpm release:check "npm-v$(node -p "require('./package.json').version")"
       - name: Clean consumer package smoke
         run: |
           set -euo pipefail
@@ -58,6 +64,9 @@ jobs:
           pnpm pack --pack-destination "$tmp_dir"
           archive="$(find "$tmp_dir" -maxdepth 1 -type f -name 'dhs-multi-agent-*.tgz' -print -quit)"
           test -n "$archive"
+          tar -tzf "$archive" | grep -Fx 'package/cordis.patch.yml'
+          tar -tzf "$archive" | grep -Fx 'package/dist/index.js'
+          tar -tzf "$archive" | grep -Fx 'package/dist/types/index.d.ts'
           mkdir "$tmp_dir/consumer"
           cd "$tmp_dir/consumer"
           pnpm init
@@ -70,9 +79,27 @@ jobs:
           }
           console.log(`consumer import OK: ${required.join(', ')}`)
           NODE
+          pnpm add -D typescript@5.8.2
+          cat > types-smoke.ts <<'TS'
+          import { Task, type TaskOutcome, type TaskSpec } from 'dhs-multi-agent'
+
+          const spec: TaskSpec = { id: 'type-smoke', agentId: 'agent', prompt: 'hello' }
+          const task = new Task(spec)
+          const outcome: TaskOutcome = {
+            taskId: task.id,
+            status: 'completed',
+            text: undefined,
+            error: undefined,
+            raw: undefined,
+            durationMs: 1,
+          }
+          void outcome
+          TS
+          pnpm exec tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM,ESNext.Disposable types-smoke.ts
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-release-artifacts
           path: |
             dist/index.js
+            dist/types/index.d.ts
             packages/dsh-multi-agent/dist/dsh.bundle.js

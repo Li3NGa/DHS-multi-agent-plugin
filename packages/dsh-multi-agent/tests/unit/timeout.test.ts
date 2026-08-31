@@ -36,4 +36,27 @@ describe('run-level timeout validation', () => {
       expect(plannerCalls).toBe(0)
     },
   )
+
+  it('accepts a finite positive timeout and dispatches normally', async () => {
+    let executeCalls = 0
+    const executeOk: TaskExecute = async (task) => {
+      executeCalls += 1
+      return {
+        taskId: task.id,
+        status: 'completed' as const,
+        text: 'ok',
+        error: undefined,
+        durationMs: 1,
+        raw: undefined,
+      }
+    }
+
+    const result = await planAndRunDag('p', executeOk, { planner, agents }, {
+      runId: 'valid-timeout',
+      timeoutMs: 1_000,
+    })
+
+    expect(result.schedulerReport.ok).toBe(true)
+    expect(executeCalls).toBe(1)
+  })
 })

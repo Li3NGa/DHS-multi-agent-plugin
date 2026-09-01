@@ -42,25 +42,28 @@ export class RunRegistry {
     this.#maxRuns = maxRuns
   }
   start(runId: string, at = new Date().toISOString()): void {
+    const current = this.#runs.get(runId)
+    if (current && current.status !== 'running') return
     this.#runs.delete(runId)
     this.#runs.set(runId, { runId, status: 'running', startedAt: at, finishedAt: undefined, durationMs: 0, attempts: 0, repairsUsed: 0, replansUsed: 0, failureCount: 0, failures: [], decisions: [] })
     this.#trim()
   }
   attempt(runId: string, attempt: number): void {
     const r = this.#runs.get(runId)
-    if (r) this.#runs.set(runId, { ...r, attempts: Math.max(r.attempts, attempt) })
+    if (r && r.status === 'running') this.#runs.set(runId, { ...r, attempts: Math.max(r.attempts, attempt) })
   }
   failure(runId: string, summary: FailureSummary): void {
     const r = this.#runs.get(runId)
-    if (!r) return
+    if (!r || r.status !== 'running') return
     this.#runs.set(runId, { ...r, failureCount: r.failureCount + 1, failures: [...r.failures, summary], attempts: Math.max(r.attempts, summary.attempt) })
   }
   decision(runId: string, decision: RecoveryDecision): void {
     const r = this.#runs.get(runId)
-    if (r) this.#runs.set(runId, { ...r, decisions: [...r.decisions, decision] })
+    if (r && r.status === 'running') this.#runs.set(runId, { ...r, decisions: [...r.decisions, decision] })
   }
   finish(result: RecoveryRunResult, at = new Date().toISOString()): void {
     const previous = this.#runs.get(result.runId)
+    if (previous && previous.status !== 'running') return
     const startedAt = previous?.startedAt ?? at
     const failures = result.failures.map(f => ({ at: f.timestamp, attempt: f.attempt, code: f.code, taskId: f.taskId, agentId: f.agentId }))
     this.#runs.set(result.runId, { runId: result.runId, status: result.status, startedAt, finishedAt: at, durationMs: Math.max(0, Date.parse(at) - Date.parse(startedAt)), attempts: result.attempts, repairsUsed: result.repairsUsed, replansUsed: result.replansUsed, failureCount: failures.length, failures, decisions: [...result.decisions] })
@@ -68,7 +71,7 @@ export class RunRegistry {
   }
   complete(runId: string, status: RunInspectionStatus, attempts: number, repairsUsed: number, replansUsed: number, at: string): void {
     const current = this.#runs.get(runId)
-    if (!current) return
+    if (!current || current.status !== 'running') return
     this.#runs.set(runId, { ...current, status, finishedAt: at, durationMs: Math.max(0, Date.parse(at) - Date.parse(current.startedAt)), attempts, repairsUsed, replansUsed })
   }
   get(runId: string): RunInspection | undefined {

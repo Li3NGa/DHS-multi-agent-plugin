@@ -92,7 +92,7 @@ export class RunRegistry {
 }
 
 export interface DiagnosticsOptions {
-  readonly metrics: { snapshot(): MetricsSnapshot }
+  readonly metrics: { snapshot(): MetricsSnapshot; observer?: RuntimeObserver }
   readonly registry?: RunRegistry
   readonly observer?: RuntimeObserver
   readonly now?: () => number
@@ -128,8 +128,14 @@ export class RuntimeDiagnostics {
       : activeRuns > 0 || metrics.tasksFailed > 0 || metrics.recoveryFailed > 0 ? 'degraded' : 'healthy'
     return { status, checkedAt: new Date(this.#now()).toISOString(), uptimeMs: Math.max(0, this.#now() - this.#startedAt), activeRuns, metrics, reasons }
   }
+  /** Ingest one runtime event into diagnostics and its configured metrics sink. */
+  ingest(event: ObservabilityEvent): void {
+    if (this.#metrics.observer !== undefined) observe(this.#metrics.observer, event)
+    this.#consume(event)
+    observe(this.#observer, event)
+  }
   observer(): RuntimeObserver {
-    return event => { this.#consume(event); observe(this.#observer, event) }
+    return event => this.ingest(event)
   }
   #consume(event: ObservabilityEvent): void {
     switch (event.type) {

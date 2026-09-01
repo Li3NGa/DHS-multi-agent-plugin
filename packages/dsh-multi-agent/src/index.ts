@@ -14,7 +14,8 @@ import type { SupervisorRunResult } from './supervisor'
 import { createRecoveryManager, type RecoveryManager } from './recovery'
 import type { AgentDescriptor, PlannerPlan } from './planner'
 import type { RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult } from './recovery'
-import { observe, taskFinished, taskStarted, type RuntimeObserver } from './observability'
+import { observe, taskFinished, taskStarted, createMetricsCollector, type RuntimeObserver } from './observability'
+import { createRuntimeDiagnostics, RuntimeDiagnostics, RunRegistry, type RunInspection, type RuntimeHealthSnapshot } from './diagnostics'
 
 export const inject = ['agents']
 export const DEFAULT_TIMEOUT_MS = 60_000
@@ -22,16 +23,14 @@ export const DEFAULT_TIMEOUT_MS = 60_000
 export interface PluginConfig {
   readonly concurrency?: number | undefined
   readonly defaultTimeoutMs?: number | undefined
-  /** Default recovery policy for `runWithRecovery` / `recoveryManager`. */
   readonly recovery?: RecoveryPolicyOptions | undefined
-  /** Optional privacy-preserving runtime event sink. Observer failures are ignored. */
   readonly observability?: RuntimeObserver | undefined
+  /** Optional preconfigured diagnostics registry. Default: process-local bounded diagnostics. */
+  readonly diagnostics?: RuntimeDiagnostics | undefined
 }
 
 export interface RecoveryRunApiOptions extends RecoveryRunOptions {
-  /** Routable metadata for the agents used by the plan. */
   readonly agents: readonly AgentDescriptor[]
-  /** Per-run override of the plugin's default recovery policy. */
   readonly recovery?: RecoveryPolicyOptions | undefined
 }
 
@@ -40,85 +39,61 @@ export interface MultiAgentApi {
   runSequential(steps: readonly SequentialStep[], options?: Omit<SequentialOptions, 'concurrency'>): Promise<SequentialReport>
   runRelay(options: Omit<RelayOptions, 'concurrency'>): Promise<RelayReport>
   runBroadcast(options: Omit<BroadcastOptions, 'concurrency'>): Promise<BroadcastReport>
-  /** Execute an arbitrary dependency graph without linearizing it. */
   runDag(tasks: readonly TaskSpec[], options?: Omit<DagOptions, 'concurrency'>): Promise<SchedulerReport>
-  /** Create a deterministic RecoveryManager bound to this plugin's executor. */
   recoveryManager(agents: readonly AgentDescriptor[], policy?: RecoveryPolicyOptions): RecoveryManager
-  /** Execute one planner plan with bounded retry / repair / replan recovery. */
   runWithRecovery(plan: PlannerPlan, options: RecoveryRunApiOptions): Promise<RecoveryRunResult>
+  diagnostics(): RuntimeDiagnostics
 }
 
 export function apply(ctx: DshContext, config: PluginConfig = {}): void {
+  const metrics = createMetricsCollector()
+  const diagnostics = config.diagnostics ?? createRuntimeDiagnostics({ metrics })
+  const diagnosticObserver = diagnostics.observer()
+  const runtimeObserver: RuntimeObserver = event => {
+    metrics.observer(event)
+    diagnosticObserver(event)
+    observe(config.observability, event)
+  }
   const runner = new AgentRunner(ctx, { defaultTimeoutMs: config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS })
   const execute: TaskExecute = async (task, signal) => {
-    observe(config.observability, taskStarted(task))
+    observe(runtimeObserver, taskStarted(task))
     const outcome = await runner.run(task, signal)
-    observe(config.observability, taskFinished(task, outcome))
+    observe(runtimeObserver, taskFinished(task, outcome))
     return outcome
   }
 
-  const makeRecoveryManager = (
-    agents: readonly AgentDescriptor[],
-    policy: RecoveryPolicyOptions | undefined,
-  ): RecoveryManager => createRecoveryManager({
+  const makeRecoveryManager = (agents: readonly AgentDescriptor[], policy: RecoveryPolicyOptions | undefined): RecoveryManager => createRecoveryManager({
     supervisor: createSupervisor({ execute }),
     agents,
     ...(policy !== undefined ? { policy } : config.recovery !== undefined ? { policy: config.recovery } : {}),
-    ...(config.observability !== undefined ? { observer: config.observability } : {}),
+    observer: runtimeObserver,
   })
 
   const api: MultiAgentApi = {
-    scheduler: (options) => new Scheduler(execute, { concurrency: config.concurrency, ...options }),
+    scheduler: options => new Scheduler(execute, { concurrency: config.concurrency, ...options }),
     runSequential: (steps, options) => runSequential(execute, steps, { concurrency: config.concurrency, ...options }),
-    runRelay: (options) => runRelay(execute, { concurrency: config.concurrency, ...options }),
-    runBroadcast: (options) => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
+    runRelay: options => runRelay(execute, { concurrency: config.concurrency, ...options }),
+    runBroadcast: options => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
     runDag: (tasks, options) => runDag(execute, tasks, { concurrency: config.concurrency, ...options }),
     recoveryManager: (agents, policy) => makeRecoveryManager(agents, policy),
     runWithRecovery: (plan, options) => {
       const { agents, recovery, ...runOptions } = options
       return makeRecoveryManager(agents, recovery).run(plan, runOptions)
     },
+    diagnostics: () => diagnostics,
   }
   ctx.reflect?.provide('multiAgent', api)
 }
 
 export { AgentRunner, Scheduler, Task, TaskGraph, GraphError, runSequential, runRelay, runBroadcast, runDag }
 export type { AgentRunnerOptions, TaskExecute, TaskOutcome, TaskRawEvents, TaskSpec, TaskStatus, TaskMetadata, SchedulerOptions, SchedulerReport, SequentialOptions, SequentialReport, SequentialStep, RelayOptions, RelayReport, BroadcastOptions, BroadcastReport, DagOptions, StrategyReport, StrategyTask, StrategyError, StrategyMetadata, StrategyKind, StrategyRunStatus, DshContext, DshAgentHandle, DshAgentLookup, SessionEvent, UserMessage }
-
-export {
-  SupervisorError, SupervisorValidationError, SupervisorExecutionError, SupervisorCancellationError, SupervisorTimeoutError, SupervisorAggregationError,
-  isSupervisorError, assertTransition, isTerminalState, strategyEntryPoint, assertKnownStrategy,
-  Supervisor, createSupervisor, validateSupervisorInput,
-} from './supervisor'
-export type {
-  SupervisorPlan, SupervisorStrategy, SupervisorStrategyReport, SupervisorRunStatus, SupervisorPhase, SupervisorState,
-  SupervisorRunInput, SupervisorRunResult, SupervisorSchedulerReport, SupervisorErrorKind, SupervisorErrorFields,
-  SupervisorDeps, SupervisorStrategyEntryPoints,
-} from './supervisor'
-
-export {
-  PlannerError, PlanParseError, PlanValidationError, PlanRoutingError, PlanIntegrationError, isPlannerError,
-  PlannerV1, createPlanner, parsePlanText, PlanValidator, createPlanValidator, AgentRouter, createAgentRouter,
-  topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, planAndRunDag, createPlanPipeline,
-} from './planner'
-export type {
-  AgentDescriptor, PlanTask, PlannerPlan, PlanFormat, PlanSource, PlannerResult, PlanIssue, PlanIssueSeverity,
-  ValidatedPlan, RouteAssignment, RoutedTask, RoutedPlan, PlanExecutionStrategy, PlannedExecutionResult,
-  PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions, PlanDagRunOptions, PlannedDagExecutionResult,
-} from './planner'
-
-export {
-  RECOVERABILITY, classifyThrown, classifyResult, extractTaskFailures, extractCompletedTaskIds,
-  RetryPolicy, delay, applyIssueRepairs, clearAgentAssignments, deterministicReplan,
-  RecoveryManager, createRecoveryManager, planId,
-} from './recovery'
-export type {
-  FailureCode, Recoverability, TaskFailureRef, FailureRecord, RecoveryExecutionContext, RecoveryDecision,
-  RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult, PlanRepair, RepairRecord,
-  AssignmentRepairResult, ReplanRule, ReplanInput, ReplanResult, RecoveryManagerDeps,
-} from './recovery'
-
-export {
-  MetricsCollector, createMetricsCollector, observe, taskStarted, taskFinished,
-} from './observability'
+export { SupervisorError, SupervisorValidationError, SupervisorExecutionError, SupervisorCancellationError, SupervisorTimeoutError, SupervisorAggregationError, isSupervisorError, assertTransition, isTerminalState, strategyEntryPoint, assertKnownStrategy, Supervisor, createSupervisor, validateSupervisorInput } from './supervisor'
+export type { SupervisorPlan, SupervisorStrategy, SupervisorStrategyReport, SupervisorRunStatus, SupervisorPhase, SupervisorState, SupervisorRunInput, SupervisorRunResult, SupervisorSchedulerReport, SupervisorErrorKind, SupervisorErrorFields, SupervisorDeps, SupervisorStrategyEntryPoints } from './supervisor'
+export { PlannerError, PlanParseError, PlanValidationError, PlanRoutingError, PlanIntegrationError, isPlannerError, PlannerV1, createPlanner, parsePlanText, PlanValidator, createPlanValidator, AgentRouter, createAgentRouter, topologicalOrder, routedPlanToSupervisorPlan, planToSupervisorInput, planAndRun, planAndRunDag, createPlanPipeline } from './planner'
+export type { AgentDescriptor, PlanTask, PlannerPlan, PlanFormat, PlanSource, PlannerResult, PlanIssue, PlanIssueSeverity, ValidatedPlan, RouteAssignment, RoutedTask, RoutedPlan, PlanExecutionStrategy, PlannedExecutionResult, PlannerDeps, PlanValidatorDeps, AgentRouterDeps, PlanPipelineDeps, PlanRunOptions, PlanDagRunOptions, PlannedDagExecutionResult } from './planner'
+export { RECOVERABILITY, classifyThrown, classifyResult, extractTaskFailures, extractCompletedTaskIds, RetryPolicy, delay, applyIssueRepairs, clearAgentAssignments, deterministicReplan, RecoveryManager, createRecoveryManager, planId } from './recovery'
+export type { FailureCode, Recoverability, TaskFailureRef, FailureRecord, RecoveryExecutionContext, RecoveryDecision, RecoveryPolicyOptions, RecoveryRunOptions, RecoveryRunResult, PlanRepair, RepairRecord, AssignmentRepairResult, ReplanRule, ReplanInput, ReplanResult, RecoveryManagerDeps } from './recovery'
+export { MetricsCollector, createMetricsCollector, observe, taskStarted, taskFinished } from './observability'
 export type { ObservabilityEvent, RuntimeObserver, MetricsSnapshot } from './observability'
+export { RuntimeDiagnostics, RunRegistry, createRuntimeDiagnostics } from './diagnostics'
+export type { RunInspection, RuntimeHealthSnapshot, RuntimeHealthStatus } from './diagnostics'

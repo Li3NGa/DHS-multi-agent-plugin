@@ -30,6 +30,15 @@ describe('production diagnostics', () => {
     expect(run.finishedAt).toBe('2026-09-01T00:00:02.000Z')
   })
 
+  it('ignores orphan lifecycle events', () => {
+    const registry = new RunRegistry()
+    registry.attempt('missing', 2)
+    registry.failure('missing', { at: '2026-09-01T00:00:00.000Z', attempt: 2, code: 'TIMEOUT', taskId: 'task-1', agentId: 'agent-1' })
+    registry.decision('missing', 'retry')
+    registry.complete('missing', 'failed', 2, 0, 0, '2026-09-01T00:00:01.000Z')
+    expect(registry.get('missing')).toBeUndefined()
+  })
+
   it('derives health from bounded runtime signals', () => {
     const metrics = createMetricsCollector()
     const diagnostics = createRuntimeDiagnostics({ metrics, startedAt: 1000, now: () => 5000 })

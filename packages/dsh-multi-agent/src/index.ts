@@ -46,12 +46,10 @@ export interface MultiAgentApi {
 }
 
 export function apply(ctx: DshContext, config: PluginConfig = {}): void {
-  const metrics = createMetricsCollector()
-  const diagnostics = config.diagnostics ?? createRuntimeDiagnostics({ metrics })
-  const diagnosticObserver = diagnostics.observer()
+  const metrics = config.diagnostics === undefined ? createMetricsCollector() : undefined
+  const diagnostics = config.diagnostics ?? createRuntimeDiagnostics({ metrics: metrics! })
   const runtimeObserver: RuntimeObserver = event => {
-    metrics.observer(event)
-    diagnosticObserver(event)
+    diagnostics.ingest(event)
     observe(config.observability, event)
   }
   const runner = new AgentRunner(ctx, { defaultTimeoutMs: config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS })
@@ -72,8 +70,8 @@ export function apply(ctx: DshContext, config: PluginConfig = {}): void {
   const api: MultiAgentApi = {
     scheduler: options => new Scheduler(execute, { concurrency: config.concurrency, ...options }),
     runSequential: (steps, options) => runSequential(execute, steps, { concurrency: config.concurrency, ...options }),
-    runRelay: options => runRelay(execute, { concurrency: config.concurrency, ...options }),
-    runBroadcast: options => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
+    runRelay: (options) => runRelay(execute, { concurrency: config.concurrency, ...options }),
+    runBroadcast: (options) => runBroadcast(execute, { concurrency: config.concurrency, ...options }),
     runDag: (tasks, options) => runDag(execute, tasks, { concurrency: config.concurrency, ...options }),
     recoveryManager: (agents, policy) => makeRecoveryManager(agents, policy),
     runWithRecovery: (plan, options) => {

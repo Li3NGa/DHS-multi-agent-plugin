@@ -13,6 +13,23 @@ describe('production diagnostics', () => {
     expect(registry.list()[0]?.runId).toBe('run-3')
   })
 
+  it('ignores lifecycle events after a run reaches a terminal state', () => {
+    const registry = new RunRegistry()
+    registry.start('run-1', '2026-09-01T00:00:00.000Z')
+    registry.attempt('run-1', 1)
+    registry.complete('run-1', 'completed', 1, 0, 0, '2026-09-01T00:00:02.000Z')
+    registry.attempt('run-1', 9)
+    registry.failure('run-1', { at: '2026-09-01T00:00:03.000Z', attempt: 9, code: 'TIMEOUT', taskId: 'task-1', agentId: 'agent-1' })
+    registry.decision('run-1', 'retry')
+    registry.complete('run-1', 'failed', 9, 1, 1, '2026-09-01T00:00:04.000Z')
+    const run = registry.get('run-1')!
+    expect(run.status).toBe('completed')
+    expect(run.attempts).toBe(1)
+    expect(run.failureCount).toBe(0)
+    expect(run.decisions).toEqual([])
+    expect(run.finishedAt).toBe('2026-09-01T00:00:02.000Z')
+  })
+
   it('derives health from bounded runtime signals', () => {
     const metrics = createMetricsCollector()
     const diagnostics = createRuntimeDiagnostics({ metrics, startedAt: 1000, now: () => 5000 })

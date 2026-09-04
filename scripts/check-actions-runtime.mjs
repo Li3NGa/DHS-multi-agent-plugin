@@ -29,7 +29,7 @@ const seen = new Map()
 for (const name of entries) {
   const content = await readFile(join(workflowDir, name), 'utf8')
   for (const rawLine of content.split(/\r?\n/)) {
-    const match = rawLine.match(/^\s*-\s+uses:\s+([^\s#]+)/)
+    const match = rawLine.match(/^\s*(?:-\s+)?uses:\s+([^\s#]+)/)
     if (!match?.[1]) continue
 
     const ref = match[1]

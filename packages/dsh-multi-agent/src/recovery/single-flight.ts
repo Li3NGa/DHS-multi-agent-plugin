@@ -28,3 +28,8 @@ export class SingleFlightRecoveryManager extends RecoveryManager {
 export function createSingleFlightRecoveryManager(deps: RecoveryManagerDeps): SingleFlightRecoveryManager {
   return new SingleFlightRecoveryManager(deps)
 }
+
+/** Backward-compatible public factory with single-flight protection. */
+export function createRecoveryManager(deps: RecoveryManagerDeps): SingleFlightRecoveryManager {
+  return createSingleFlightRecoveryManager(deps)
+}

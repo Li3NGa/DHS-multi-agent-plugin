@@ -181,7 +181,8 @@ function validateRelayOptions(options: Omit<RelayOptions, 'signal'>, state: Supe
 
 /**
  * Executable Supervisor V1. One instance may run multiple runs sequentially;
- * each run owns a fresh lifecycle and its own AbortController.
+ * concurrent runs on one instance are rejected because lifecycle state is
+ * instance-scoped and must never be shared by two active runs.
  */
 export class Supervisor {
   readonly #execute: TaskExecute
@@ -218,9 +219,19 @@ export class Supervisor {
    * Errors: a malformed input raises SupervisorValidationError; a Runtime /
    * strategy failure raises SupervisorExecutionError (original preserved in
    * `cause`); cancellation / timeout map to SupervisorCancellationError /
-   * SupervisorTimeoutError. Nothing is swallowed.
+   * SupervisorTimeoutError. Concurrent calls on one Supervisor instance raise
+   * a plain lifecycle usage error before mutating state.
    */
   async run(input: SupervisorRunInput): Promise<SupervisorRunResult> {
+    if (
+      this.#state === 'validating' ||
+      this.#state === 'scheduled' ||
+      this.#state === 'running' ||
+      this.#state === 'aggregating'
+    ) {
+      throw new Error('Supervisor is already running')
+    }
+
     const startedAt = Date.now()
     this.#state = 'created'
 

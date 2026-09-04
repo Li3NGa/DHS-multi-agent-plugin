@@ -19,8 +19,6 @@ run('node', ['scripts/check-public-api.mjs'])
 run('node', ['scripts/check-public-surface.mjs'])
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-// The package's prepare lifecycle emits build output. Ignore lifecycle scripts here
-// so --json remains machine-readable; build has already completed before this gate.
 const pack = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: new URL(root),
   encoding: 'utf8',
@@ -30,7 +28,26 @@ if (pack.status !== 0) {
   process.exit(pack.status ?? 1)
 }
 
-const result = JSON.parse(pack.stdout)
+// npm may emit lifecycle/build messages before its JSON result even with
+// --ignore-scripts. Extract the final JSON array instead of assuming stdout is
+// machine-readable from byte zero.
+const jsonStarts = [...pack.stdout.matchAll(/\[\s*\{/g)].map(match => match.index ?? -1).filter(index => index >= 0)
+const jsonStart = jsonStarts.at(-1)
+if (jsonStart === undefined) {
+  console.error('Release candidate pack inspection failed: npm returned no JSON result.')
+  console.error(pack.stdout)
+  process.exit(1)
+}
+
+let result
+try {
+  result = JSON.parse(pack.stdout.slice(jsonStart))
+} catch (error) {
+  console.error('Release candidate pack inspection failed: invalid npm JSON result.')
+  console.error(error instanceof Error ? error.message : String(error))
+  process.exit(1)
+}
+
 const files = result[0]?.files?.map(file => file.path) ?? []
 const required = ['dist/index.js', 'dist/types/index.d.ts', 'cordis.patch.yml']
 const missing = required.filter(file => !files.includes(file))

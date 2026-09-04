@@ -277,8 +277,15 @@ export class RecoveryManager {
         )
         if (repair.ok) {
           currentPlan = repair.plan
-          if (failure.agentId !== undefined) {
-            pool = pool.filter((agent) => agent.id !== failure.agentId)
+          const unavailableAgentIds = new Set<string>()
+          for (const ref of failure.taskFailures ?? []) {
+            if (ref.code === 'AGENT_UNAVAILABLE' && ref.agentId !== undefined) {
+              unavailableAgentIds.add(ref.agentId)
+            }
+          }
+          if (failure.agentId !== undefined) unavailableAgentIds.add(failure.agentId)
+          if (unavailableAgentIds.size > 0) {
+            pool = pool.filter((agent) => !unavailableAgentIds.has(agent.id))
           }
           repairsUsed += 1
           recordDecision('repair')

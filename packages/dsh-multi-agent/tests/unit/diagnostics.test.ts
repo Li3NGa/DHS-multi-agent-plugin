@@ -42,25 +42,27 @@ describe('production diagnostics', () => {
   it('keeps historical failures degraded and marks active failing runs unhealthy', () => {
     const metrics = createMetricsCollector()
     const diagnostics = createRuntimeDiagnostics({ metrics, startedAt: 1000, now: () => 5000 })
+    const observer = diagnostics.observer()
     expect(diagnostics.health()).toMatchObject({ status: 'healthy', uptimeMs: 4000, activeRuns: 0 })
 
     metrics.observer({ type: 'task.finished', at: new Date().toISOString(), taskId: 'task-1', agentId: 'agent-1', status: 'failed', durationMs: 10 })
     expect(diagnostics.health().status).toBe('degraded')
 
-    diagnostics.observer({ type: 'recovery.started', at: '2026-09-01T00:00:00.000Z', runId: 'run-1', planId: 'plan-1' })
-    diagnostics.observer({ type: 'recovery.failure', at: '2026-09-01T00:00:01.000Z', runId: 'run-1', attempt: 1, code: 'TIMEOUT', taskId: 'task-1', agentId: 'agent-1' })
+    observer({ type: 'recovery.started', at: '2026-09-01T00:00:00.000Z', runId: 'run-1', planId: 'plan-1' })
+    observer({ type: 'recovery.failure', at: '2026-09-01T00:00:01.000Z', runId: 'run-1', attempt: 1, code: 'TIMEOUT', taskId: 'task-1', agentId: 'agent-1' })
     expect(diagnostics.health()).toMatchObject({ status: 'unhealthy', activeRuns: 1 })
     expect(diagnostics.registry.activeFailureCount()).toBe(1)
 
-    diagnostics.observer({ type: 'recovery.finished', at: '2026-09-01T00:00:02.000Z', runId: 'run-1', status: 'completed', attempts: 2, repairsUsed: 0, replansUsed: 0, durationMs: 2000 })
+    observer({ type: 'recovery.finished', at: '2026-09-01T00:00:02.000Z', runId: 'run-1', status: 'completed', attempts: 2, repairsUsed: 0, replansUsed: 0, durationMs: 2000 })
     expect(diagnostics.health().status).toBe('degraded')
   })
 
   it('treats historical recovery timeouts as degraded rather than permanently unhealthy', () => {
     const metrics = createMetricsCollector()
     const diagnostics = createRuntimeDiagnostics({ metrics })
-    diagnostics.observer({ type: 'recovery.started', at: '2026-09-01T00:00:00.000Z', runId: 'run-1', planId: 'plan-1' })
-    diagnostics.observer({ type: 'recovery.finished', at: '2026-09-01T00:00:01.000Z', runId: 'run-1', status: 'timeout', attempts: 3, repairsUsed: 0, replansUsed: 0, durationMs: 1000 })
+    const observer = diagnostics.observer()
+    observer({ type: 'recovery.started', at: '2026-09-01T00:00:00.000Z', runId: 'run-1', planId: 'plan-1' })
+    observer({ type: 'recovery.finished', at: '2026-09-01T00:00:01.000Z', runId: 'run-1', status: 'timeout', attempts: 3, repairsUsed: 0, replansUsed: 0, durationMs: 1000 })
 
     expect(diagnostics.health().status).toBe('degraded')
     expect(diagnostics.health().reasons).toContain('1 recovery timeout(s) recorded')

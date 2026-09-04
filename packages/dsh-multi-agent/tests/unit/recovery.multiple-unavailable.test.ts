@@ -27,7 +27,8 @@ describe('Recovery repair with multiple unavailable agents', () => {
       agents: [
         { id: 'dead-a', capabilities: [] },
         { id: 'dead-b', capabilities: [] },
-        { id: 'live', capabilities: [] },
+        { id: 'live-a', capabilities: [] },
+        { id: 'live-b', capabilities: [] },
       ],
       policy: { maxAttempts: 2 },
     })
@@ -35,8 +36,8 @@ describe('Recovery repair with multiple unavailable agents', () => {
     const result = await manager.run(
       {
         tasks: [
-          { id: 'a', agentId: 'dead-a', prompt: 'a' },
-          { id: 'b', agentId: 'dead-b', prompt: 'b' },
+          { id: 'a', agentId: 'dead-a', prompt: 'same prompt' },
+          { id: 'b', agentId: 'dead-b', prompt: 'same prompt' },
         ],
       },
       { runId: 'r23-multi-repair', input: 'p', strategy: 'broadcast' },
@@ -46,6 +47,6 @@ describe('Recovery repair with multiple unavailable agents', () => {
     expect(result.attempts).toBe(2)
     expect(result.repairsUsed).toBe(1)
     expect(result.decisions).toEqual(['repair', 'completed'])
-    expect(calls).toEqual(['dead-a', 'dead-b', 'live', 'live'])
+    expect(calls).toEqual(['dead-a', 'dead-b', 'live-a', 'live-b'])
   })
 })

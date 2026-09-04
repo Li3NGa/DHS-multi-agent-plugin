@@ -34,6 +34,7 @@ describe('Supervisor run mutex', () => {
       plan: {
         strategy: 'sequential' as const,
         steps: [{ agentId: 'agent-1', prompt: 'work' }],
+        options: {},
       },
     }
 

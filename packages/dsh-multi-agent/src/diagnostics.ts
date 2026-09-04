@@ -87,6 +87,13 @@ export class RunRegistry {
     for (const r of this.#runs.values()) if (r.status === 'running') n++
     return n
   }
+  activeFailureCount(): number {
+    let n = 0
+    for (const r of this.#runs.values()) {
+      if (r.status === 'running') n += r.failureCount
+    }
+    return n
+  }
   clear(): void { this.#runs.clear() }
   #trim(): void { while (this.#runs.size > this.#maxRuns) this.#runs.delete(this.#runs.keys().next().value!) }
 }
@@ -119,13 +126,19 @@ export class RuntimeDiagnostics {
   health(): RuntimeHealthSnapshot {
     const metrics = this.#metrics.snapshot()
     const activeRuns = this.#registry.activeCount()
+    const activeFailures = this.#registry.activeFailureCount()
     const reasons: string[] = []
     if (activeRuns) reasons.push(`${activeRuns} run(s) active`)
-    if (metrics.recoveryTimeouts) reasons.push(`${metrics.recoveryTimeouts} recovery timeout(s)`)
+    if (activeFailures) reasons.push(`${activeFailures} failure(s) in active run(s)`)
+    if (metrics.recoveryTimeouts) reasons.push(`${metrics.recoveryTimeouts} recovery timeout(s) recorded`)
     if (metrics.tasksFailed > 0 && metrics.tasksCompleted === 0) reasons.push('no completed tasks with recorded failures')
-    const status: RuntimeHealthStatus = metrics.recoveryTimeouts > 0 || (metrics.tasksFailed > 0 && metrics.tasksCompleted === 0)
+
+    const status: RuntimeHealthStatus = activeFailures > 0
       ? 'unhealthy'
-      : activeRuns > 0 || metrics.tasksFailed > 0 || metrics.recoveryFailed > 0 ? 'degraded' : 'healthy'
+      : activeRuns > 0 || metrics.tasksFailed > 0 || metrics.recoveryFailed > 0 || metrics.recoveryTimeouts > 0
+        ? 'degraded'
+        : 'healthy'
+
     return { status, checkedAt: new Date(this.#now()).toISOString(), uptimeMs: Math.max(0, this.#now() - this.#startedAt), activeRuns, metrics, reasons }
   }
   /** Ingest one runtime event into diagnostics and its configured metrics sink. */

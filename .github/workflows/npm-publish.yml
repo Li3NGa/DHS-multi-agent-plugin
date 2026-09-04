@@ -56,6 +56,9 @@ jobs:
       - name: Verify release contract
         run: pnpm release:contract
 
+      - name: Verify public API
+        run: pnpm api:check
+
       - name: Validate package contents
         run: npm pack --dry-run
 

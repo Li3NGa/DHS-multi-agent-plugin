@@ -15,6 +15,7 @@ on:
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
+      - "scripts/check-actions-runtime.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -30,6 +31,7 @@ on:
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
+      - "scripts/check-actions-runtime.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -48,6 +50,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Validate workflow action runtimes
+        run: node scripts/check-actions-runtime.mjs
       - name: Enable pnpm
         run: corepack enable
       - uses: actions/setup-node@v7

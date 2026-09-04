@@ -267,7 +267,7 @@ export class RecoveryManager {
         await delay(this.#policy.delayMs, options.signal)
         continue
       }
-      if (failure.recoverability.repairable) {
+      if (failure.recoverability.repairable && this.#policy.canAttempt(attempt + 1)) {
         const strategyIds = (failure.taskFailures ?? [])
           .filter((ref) => ref.code === 'AGENT_UNAVAILABLE')
           .map((ref) => ref.taskId)
@@ -285,7 +285,7 @@ export class RecoveryManager {
           continue
         }
       }
-      if (failure.recoverability.replanable && this.#policy.canReplan(replansUsed)) {
+      if (failure.recoverability.replanable && this.#policy.canAttempt(attempt + 1) && this.#policy.canReplan(replansUsed)) {
         const mappedTaskFailures = failure.taskFailures?.map((ref) => ({
           ...ref,
           taskId: strategyIdToPlanId([ref.taskId], routed, strategy)[0]!,

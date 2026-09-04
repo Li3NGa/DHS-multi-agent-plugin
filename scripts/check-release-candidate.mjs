@@ -19,7 +19,9 @@ run('node', ['scripts/check-public-api.mjs'])
 run('node', ['scripts/check-public-surface.mjs'])
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const pack = spawnSync(npm, ['pack', '--dry-run', '--json'], {
+// The package's prepare lifecycle emits build output. Ignore lifecycle scripts here
+// so --json remains machine-readable; build has already completed before this gate.
+const pack = spawnSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: new URL(root),
   encoding: 'utf8',
 })

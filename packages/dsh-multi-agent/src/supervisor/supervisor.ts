@@ -127,6 +127,9 @@ function validateBroadcastOptions(options: Omit<BroadcastOptions, 'signal'>, sta
   if (!Array.isArray(options.agents)) {
     throw new SupervisorValidationError('broadcast agents must be an array', { state })
   }
+  if (options.agents.length === 0) {
+    throw new SupervisorValidationError('broadcast agents must contain at least one agent', { state })
+  }
   const ids = new Set<string>()
   for (const agent of options.agents) {
     if (agent === null || typeof agent !== 'object') {
@@ -149,6 +152,9 @@ function validateSequentialPlan(
   if (!Array.isArray(steps)) {
     throw new SupervisorValidationError('sequential steps must be an array', { state })
   }
+  if (steps.length === 0) {
+    throw new SupervisorValidationError('sequential steps must contain at least one step', { state })
+  }
   for (const step of steps) {
     if (step === null || typeof step !== 'object') {
       throw new SupervisorValidationError('sequential step must be an object', { state })
@@ -168,6 +174,9 @@ function validateRelayOptions(options: Omit<RelayOptions, 'signal'>, state: Supe
   }
   if (!Array.isArray(options.steps)) {
     throw new SupervisorValidationError('relay steps must be an array', { state })
+  }
+  if (options.steps.length === 0) {
+    throw new SupervisorValidationError('relay steps must contain at least one step', { state })
   }
   for (const step of options.steps) {
     if (step === null || typeof step !== 'object') {

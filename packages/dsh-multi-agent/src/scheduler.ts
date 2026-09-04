@@ -75,6 +75,14 @@ export class Scheduler {
     }
     graph.validate()
 
+    const nonPending = graph.tasks().filter((task) => task.status !== 'pending')
+    if (nonPending.length > 0) {
+      const details = nonPending
+        .map((task) => `${task.id}=${task.status}`)
+        .join(', ')
+      throw new Error(`TaskGraph cannot be reused after scheduling; non-pending tasks: ${details}`)
+    }
+
     const controller = new AbortController()
     this.#current = controller
     const forwardAbort = () => controller.abort()

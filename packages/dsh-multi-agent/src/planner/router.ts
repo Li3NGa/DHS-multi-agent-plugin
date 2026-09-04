@@ -15,19 +15,7 @@ export class AgentRouter {
   #rr = 0
 
   constructor(deps: AgentRouterDeps) {
-    if (deps.agents.length === 0) {
-      throw new PlanRoutingError('cannot route with an empty agent pool')
-    }
-    const ids = new Set<string>()
-    for (const agent of deps.agents) {
-      if (typeof agent.id !== 'string' || agent.id.length === 0) {
-        throw new PlanRoutingError('agent pool contains an agent with an empty id')
-      }
-      if (ids.has(agent.id)) {
-        throw new PlanRoutingError(`agent pool contains duplicate agent id '${agent.id}'`)
-      }
-      ids.add(agent.id)
-    }
+    if (deps.agents.length === 0) throw new PlanRoutingError('cannot route with an empty agent pool')
     this.#agents = deps.agents
   }
 

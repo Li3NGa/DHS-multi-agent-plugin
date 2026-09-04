@@ -1,36 +1,13 @@
-/**
- * Native Agent Router — Phase E3.
- *
- * Assigns a concrete `agentId` to every planned task. Routing precedence
- * (ported from the Python reference `WorkerRouter`, not its internals):
- *   1. explicit — the task declares an `agentId` and it exists in the pool
- *   2. capability — the task requires capabilities; pick the first pool
- *      agent whose declared capabilities cover ALL of them (declaration order)
- *   3. round-robin — fall back to cycling through the pool fairly
- *
- * Deterministic: capability matching iterates the pool in declaration order,
- * so a given (pool, task) pair always resolves identically. Round-robin
- * advances only when actually used, so mixed explicit/capability plans do not
- * skew the counter.
- *
- * Routing never reaches the Runtime directly: it consumes `AgentDescriptor`
- * values supplied by the caller. Unroutable tasks raise PlanRoutingError.
- */
 import { PlanRoutingError } from './errors'
 import type { AgentDescriptor, PlanTask, RouteAssignment, RoutedPlan } from './types'
 
 export interface AgentRouterDeps {
-  /** The pool of routable agents (declaration order is significant). */
   readonly agents: readonly AgentDescriptor[]
 }
 
-/**
- * Precedence helpers: 0 = best (explicit), then capability, then round-robin.
- */
 function matchCapabilities(task: PlanTask, agent: AgentDescriptor): boolean {
   const required = task.requiredCapabilities
-  if (!required || required.length === 0) return false
-  return required.every((cap) => agent.capabilities.includes(cap))
+  return !!required?.length && required.every((cap) => agent.capabilities.includes(cap))
 }
 
 export class AgentRouter {
@@ -41,40 +18,38 @@ export class AgentRouter {
     if (deps.agents.length === 0) {
       throw new PlanRoutingError('cannot route with an empty agent pool')
     }
+    const ids = new Set<string>()
+    for (const agent of deps.agents) {
+      if (typeof agent.id !== 'string' || agent.id.length === 0) {
+        throw new PlanRoutingError('agent pool contains an agent with an empty id')
+      }
+      if (ids.has(agent.id)) {
+        throw new PlanRoutingError(`agent pool contains duplicate agent id '${agent.id}'`)
+      }
+      ids.add(agent.id)
+    }
     this.#agents = deps.agents
   }
 
-  /** Assign an agent to one task (does not advance round-robin). */
   assign(task: PlanTask): RouteAssignment {
-    const explicit = task.agentId
-    if (explicit !== undefined) {
-      const agent = this.#agents.find((candidate) => candidate.id === explicit)
-      if (agent !== undefined) {
-        return { taskId: task.id, agentId: agent.id, reason: 'explicit' }
-      }
-      // explicit agent unknown: fall through to capability / round-robin
+    if (task.agentId !== undefined) {
+      const agent = this.#agents.find((candidate) => candidate.id === task.agentId)
+      if (agent !== undefined) return { taskId: task.id, agentId: agent.id, reason: 'explicit' }
     }
 
-    if (task.requiredCapabilities && task.requiredCapabilities.length > 0) {
-      const byCap = this.#agents.find((agent) => matchCapabilities(task, agent))
-      if (byCap !== undefined) {
-        return { taskId: task.id, agentId: byCap.id, reason: 'capability' }
-      }
+    if (task.requiredCapabilities?.length) {
+      const agent = this.#agents.find((candidate) => matchCapabilities(task, candidate))
+      if (agent !== undefined) return { taskId: task.id, agentId: agent.id, reason: 'capability' }
     }
 
-    // round-robin
-    const id = this.#rr % this.#agents.length
-    const agent = this.#agents[id]
+    const agent = this.#agents[this.#rr % this.#agents.length]
     this.#rr += 1
-    if (agent === undefined) {
-      throw new PlanRoutingError('agent pool is empty', task.id)
-    }
+    if (agent === undefined) throw new PlanRoutingError('agent pool is empty', task.id)
     return { taskId: task.id, agentId: agent.id, reason: 'round-robin' }
   }
 
-  /** Route every task in a plan. Deterministic; never mutates input. */
   route(plan: readonly PlanTask[]): RoutedPlan {
-    const assignments: RouteAssignment[] = plan.map((task) => this.assign(task))
+    const assignments = plan.map((task) => this.assign(task))
     const tasks = plan.map((task, index) => ({
       id: task.id,
       prompt: task.prompt,
@@ -87,7 +62,6 @@ export class AgentRouter {
   }
 }
 
-/** Convenience factory. */
 export function createAgentRouter(deps: AgentRouterDeps): AgentRouter {
   return new AgentRouter(deps)
 }

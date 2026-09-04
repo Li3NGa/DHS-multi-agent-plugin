@@ -28,23 +28,49 @@ if (pack.status !== 0) {
   process.exit(pack.status ?? 1)
 }
 
-// npm may emit lifecycle/build messages before its JSON result even with
-// --ignore-scripts. Extract the final JSON array instead of assuming stdout is
-// machine-readable from byte zero.
-const jsonStarts = [...pack.stdout.matchAll(/\[\s*\{/g)].map(match => match.index ?? -1).filter(index => index >= 0)
-const jsonStart = jsonStarts.at(-1)
-if (jsonStart === undefined) {
-  console.error('Release candidate pack inspection failed: npm returned no JSON result.')
-  console.error(pack.stdout)
-  process.exit(1)
+function extractJsonValue(text) {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '[') continue
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === '\\') escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') {
+        inString = true
+        continue
+      }
+      if (char === '[' || char === '{') {
+        depth += 1
+        continue
+      }
+      if (char === ']' || char === '}') {
+        depth -= 1
+        if (depth === 0) {
+          const candidate = text.slice(start, index + 1)
+          try {
+            return JSON.parse(candidate)
+          } catch {
+            break
+          }
+        }
+        if (depth < 0) break
+      }
+    }
+  }
+  return undefined
 }
 
-let result
-try {
-  result = JSON.parse(pack.stdout.slice(jsonStart))
-} catch (error) {
-  console.error('Release candidate pack inspection failed: invalid npm JSON result.')
-  console.error(error instanceof Error ? error.message : String(error))
+const result = extractJsonValue(pack.stdout)
+if (!Array.isArray(result)) {
+  console.error('Release candidate pack inspection failed: npm returned no valid JSON array.')
+  console.error(pack.stdout)
   process.exit(1)
 }
 
@@ -54,7 +80,7 @@ const missing = required.filter(file => !files.includes(file))
 const leaked = files.filter(file => file.startsWith('packages/') || file.startsWith('tests/'))
 
 if (missing.length > 0 || leaked.length > 0) {
-  console.error('Release candidate tarball contract failed.')
+  console.error('Release candidate tarball contract failed')
   for (const file of missing) console.error(`- missing: ${file}`)
   for (const file of leaked) console.error(`- leaked source/test path: ${file}`)
   process.exit(1)

@@ -27,6 +27,14 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+const registry = new module.RunRegistry(1)
+if (typeof registry.activeFailureCount !== 'function') {
+  console.error('Native public API guard failed:')
+  console.error('- RunRegistry.activeFailureCount() is missing')
+  process.exit(1)
+}
+
 console.log(`Native public API guard passed for ${packageJson.name}@${packageJson.version}.`)
 console.log(`Entry: ${packageJson.main}`)
 console.log(`Verified exports: ${requiredExports.join(', ')}`)
+console.log('Verified members: RunRegistry.activeFailureCount()')

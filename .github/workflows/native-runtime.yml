@@ -14,11 +14,13 @@ on:
       - "scripts/check-npm-release.mjs"
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
+      - "scripts/check-public-surface.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "cordis.patch.yml"
+      - "README.md"
       - ".github/workflows/native-runtime.yml"
   pull_request:
     paths:
@@ -27,11 +29,13 @@ on:
       - "scripts/check-npm-release.mjs"
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
+      - "scripts/check-public-surface.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "cordis.patch.yml"
+      - "README.md"
       - ".github/workflows/native-runtime.yml"
 
 permissions:
@@ -68,6 +72,8 @@ jobs:
         run: pnpm release:contract
       - name: Validate public API
         run: pnpm api:check
+      - name: Validate public product surface
+        run: pnpm surface:check
       - name: Clean consumer package smoke
         run: |
           set -euo pipefail

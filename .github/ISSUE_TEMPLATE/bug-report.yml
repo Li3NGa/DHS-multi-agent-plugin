@@ -1,0 +1,79 @@
+name: Bug 报告
+description: 报告一个 Bug 帮助我们改进
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您提交 Bug 报告！请尽量填写以下信息，帮助我们更快定位和修复问题。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请清晰描述您遇到的问题。
+      placeholder: 描述你遇到的 bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 请提供复现该问题的详细步骤。
+      placeholder: |
+        1. 执行 '...'
+        2. 然后 '...'
+        3. 出现错误
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+      description: 您期望发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么？如果有错误信息请完整粘贴。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 您使用的版本号
+      placeholder: v0.2.0
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 运行时
+      options:
+        - TypeScript (Native/DSH)
+        - Python
+        - 两者都有
+        - 不确定
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: Node.js/Python 版本、操作系统等
+      placeholder: |
+        - OS: Windows 11
+        - Node.js: 22.14.0
+        - Python: 3.12
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 其他信息
+      description: 其他有助于诊断的信息（截图、日志等）

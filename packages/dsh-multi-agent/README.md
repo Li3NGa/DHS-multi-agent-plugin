@@ -1,121 +1,75 @@
-# DSH Multi-Agent Orchestration (Native)
+<div align="center">
 
-This package is the **production Native source tree** for the DeepSeek Harness (DSH) Cordis plugin.
+# dsh-multi-agent
 
-Production source:
+[![npm](https://img.shields.io/npm/v/dhs-multi-agent.svg)](https://www.npmjs.com/package/dhs-multi-agent)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../../LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-```text
-packages/dsh-multi-agent/src/
-```
+**DeepSeek Harness 多智能体编排插件**
 
-The Python runtime remains under `src/deepseek_multi_agent_plugin/` for its existing Python API / CLI / HTTP / MCP surface. The historical `dsh-native/` tree is verification-only; see `docs/source-of-truth.md`.
+[快速开始](#快速开始) ·
+[核心特性](#核心特性) ·
+[API](#公共-api) ·
+[开发](#开发)
 
-## Native structure
+</div>
 
-```text
-src/
-  task.ts
-  graph.ts
-  dsh.ts
-  runner.ts
-  scheduler.ts
-  planner/
-    planner.ts
-    validator.ts
-    router.ts
-    integration.ts
-  supervisor/
-    supervisor.ts
-    lifecycle.ts
-    strategy.ts
-    errors.ts
-    types.ts
-  recovery/
-    failure.ts
-    retry-policy.ts
-    repair.ts
-    replanner.ts
-    manager.ts
-  strategies/
-    sequential.ts
-    relay.ts
-    broadcast.ts
-    dag.ts
-    contract.ts
-  index.ts
-```
+---
 
-The Native execution paths are now:
+## 核心特性
 
-```text
-Supervisor path:
-input
-  -> Planner
-  -> Validator
-  -> Router
-  -> Supervisor
-  -> Strategy
-  -> Scheduler
-  -> AgentRunner
-  -> Real DSH
-  -> Recovery (when explicitly orchestrated)
+### 🔄 策略执行
+- **Sequential** — 顺序串行执行
+- **Broadcast** — 广播并行执行
+- **Relay** — 接力式传递
+- **DAG** — 任意依赖图直接执行
 
-Arbitrary-DAG path:
-input
-  -> Planner
-  -> Validator
-  -> Router
-  -> Scheduler
-  -> AgentRunner
-  -> Real DSH
+### 🧠 规划与路由
+- **Planner** — 从自然语言生成结构化任务
+- **Validator** — 严格的计划验证
+- **AgentRouter** — 基于能力的智能体路由
 
-Recovered Supervisor path:
-plan
-  -> RecoveryManager
-  -> validate
-  -> route
-  -> Supervisor
-  -> Strategy
-  -> Scheduler
-  -> AgentRunner
-  -> Real DSH
-  -> retry / repair / replan / abort (bounded)
-```
+### 🛡️ 有界恢复
+- **Retry** — 超时失败自动重试
+- **Repair** — 不可用智能体自动剔除
+- **Replan** — 依赖失败确定性重规划
+- **Abort** — 取消不触发恢复
 
-## Development
+### 📊 可观测性
+- `RuntimeDiagnostics` — 诊断指标
+- `RunRegistry` — 运行注册追踪
+- Observer 模式回调
 
-Run from the repository root:
+---
+
+## 快速开始
+
+### 安装
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm --dir packages/dsh-multi-agent typecheck
-pnpm --dir packages/dsh-multi-agent test
-pnpm --dir packages/dsh-multi-agent build
-pnpm test:smoke
+npm install dhs-multi-agent
 ```
 
-The package test and smoke suites validate the package source tree. The release entry is built by the root package into `dist/index.js`, with DSH runtime packages externalized so the host supplies them.
+### 使用
 
-## DSH integration
+```typescript
+import { apply } from 'dhs-multi-agent'
 
-Use the root `cordis.patch.yml` or the example under this package. The real-DSH smoke suite uses the published `@deepseek-ai/*` runtime packages and a scripted adapter without an API key.
+apply(ctx, {
+  concurrency: 4,
+  defaultTimeoutMs: 60_000,
+})
 
-## Current Native V1 boundaries
+// DAG 执行
+const result = await ctx.multiAgent.runDag([
+  { id: 'a', agentId: 'agent1', prompt: '任务 A' },
+  { id: 'b', agentId: 'agent2', prompt: '任务 B', dependsOn: ['a'] },
+])
 
-Native V1 keeps the verified Supervisor Strategy Contract:
-
-- `sequential`
-- `broadcast`
-- `relay`
-
-R3 adds a **direct DAG execution capability** through `runDag()` and `planAndRunDag()`. Arbitrary dependency graphs are preserved and executed by the existing Scheduler, so independent branches may run concurrently instead of being forced into a topological linearization.
-
-R4 exposes the already-verified **RecoveryManager** through the plugin API:
-
-```ts
-const result = await ctx.multiAgent.runWithRecovery(plan, {
+// 带恢复的编排
+const recovered = await ctx.multiAgent.runWithRecovery(plan, {
   runId: 'run-1',
-  input: 'user intent',
   agents: [
     { id: 'researcher', capabilities: ['research'] },
     { id: 'writer', capabilities: ['writing'] },
@@ -124,8 +78,81 @@ const result = await ctx.multiAgent.runWithRecovery(plan, {
 })
 ```
 
-Recovery is deterministic and bounded. `TIMEOUT` can retry within the attempt budget; `AGENT_UNAVAILABLE` can repair by clearing the dead explicit assignment and evicting that agent from the run-local routing pool; dependency failures can trigger deterministic replanning; cancellation never triggers recovery. The RecoveryManager itself remains separate from Supervisor V1.
+---
 
-The direct DAG path deliberately does not extend `StrategyKind` or modify the frozen Supervisor V1 contract. This keeps the Supervisor compatibility boundary stable while exposing the Runtime's actual DAG capability.
+## 公共 API
 
-No database, dashboard, Debate or Consensus implementation is part of the current Native production path.
+```typescript
+import {
+  // 核心
+  AgentRunner,
+  Scheduler,
+  Task,
+  TaskGraph,
+  // 策略
+  runSequential,
+  runBroadcast,
+  runRelay,
+  runDag,
+  // Supervisor
+  createSupervisor,
+  // 恢复
+  createRecoveryManager,
+  // 诊断
+  RuntimeDiagnostics,
+  RunRegistry,
+  createRuntimeDiagnostics,
+  // 插件
+  apply,
+} from 'dhs-multi-agent'
+```
+
+---
+
+## 架构
+
+```text
+input
+  → Planner
+  → Validator
+  → Router
+  → Supervisor / Direct DAG
+  → Strategy / Scheduler
+  → AgentRunner
+  → Real DSH
+  → Recovery / Diagnostics
+```
+
+---
+
+## 开发
+
+```bash
+# 安装依赖
+pnpm install --frozen-lockfile
+
+# 类型检查
+pnpm typecheck
+
+# 单元测试
+pnpm test
+
+# 构建
+pnpm build
+
+# Smoke 测试
+pnpm test:smoke
+```
+
+---
+
+## DSH 集成
+
+使用根目录的 `cordis.patch.yml` 或本包中的示例配置。
+Smoke 测试套件使用发布的 `@deepseek-ai/*` 运行时包和脚本化适配器，无需 API Key。
+
+---
+
+## 许可证
+
+MIT © DHS Multi-Agent Contributors

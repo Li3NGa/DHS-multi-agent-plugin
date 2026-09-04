@@ -1,7 +1,7 @@
 {
   "name": "dhs-multi-agent",
   "version": "0.2.0",
-  "description": "Native DeepSeek Harness multi-agent Cordis plugin",
+  "description": "DeepSeek Harness multi-agent orchestration plugin with DAG scheduling, supervisor planning, bounded recovery, and runtime diagnostics for Cordis.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/types/index.d.ts",
@@ -57,7 +57,16 @@
     "dsh",
     "multi-agent",
     "orchestration",
-    "cordis"
+    "cordis",
+    "agent",
+    "ai",
+    "llm",
+    "dag",
+    "scheduler",
+    "supervisor",
+    "recovery",
+    "planner",
+    "diagnostics"
   ],
   "license": "MIT",
   "engines": {

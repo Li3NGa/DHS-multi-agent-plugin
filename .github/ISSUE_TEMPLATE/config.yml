@@ -1,0 +1,9 @@
+config:
+  blank_issues_enabled: false
+  contact_links:
+    - name: 问题讨论
+      url: https://github.com/Li3NGa/DHS-multi-agent-plugin/discussions
+      about: 对于一般问题和使用疑问，请在讨论区提问
+    - name: 安全漏洞
+      url: https://github.com/Li3NGa/DHS-multi-agent-plugin/security/advisories
+      about: 安全漏洞请通过安全公告私密报告

@@ -25,6 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Validate workflow action runtimes
+        run: node scripts/check-actions-runtime.mjs
+
       - name: Enable pnpm
         run: corepack enable
 

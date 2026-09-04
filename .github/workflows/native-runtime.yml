@@ -12,6 +12,7 @@ on:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
       - "scripts/check-npm-release.mjs"
+      - "scripts/check-release-contract.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -23,6 +24,7 @@ on:
       - "packages/dsh-multi-agent/**"
       - "scripts/check-native-source.mjs"
       - "scripts/check-npm-release.mjs"
+      - "scripts/check-release-contract.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -60,6 +62,8 @@ jobs:
         run: pnpm test:smoke
       - name: Validate release metadata
         run: pnpm release:check "npm-v$(node -p "require('./package.json').version")"
+      - name: Validate release contract
+        run: pnpm release:contract
       - name: Clean consumer package smoke
         run: |
           set -euo pipefail

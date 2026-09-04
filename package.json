@@ -27,7 +27,8 @@
     "prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "test:smoke": "pnpm run build && pnpm --dir packages/dsh-multi-agent run test:smoke",
-    "release:check": "node scripts/check-npm-release.mjs"
+    "release:check": "node scripts/check-npm-release.mjs",
+    "release:contract": "node scripts/check-release-contract.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

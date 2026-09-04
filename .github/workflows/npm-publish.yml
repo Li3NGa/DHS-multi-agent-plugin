@@ -53,6 +53,9 @@ jobs:
       - name: Verify release tag matches package version
         run: pnpm release:check "$GITHUB_REF_NAME"
 
+      - name: Verify release contract
+        run: pnpm release:contract
+
       - name: Validate package contents
         run: npm pack --dry-run
 

@@ -15,6 +15,7 @@ on:
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
+      - "scripts/check-actions-runtime.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -30,6 +31,7 @@ on:
       - "scripts/check-release-contract.mjs"
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
+      - "scripts/check-actions-runtime.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -47,10 +49,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - name: Validate workflow action runtimes
+        run: node scripts/check-actions-runtime.mjs
       - name: Enable pnpm
         run: corepack enable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
@@ -114,7 +118,7 @@ jobs:
           void outcome
           TS
           npx --no-install tsc --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM,ESNext.Disposable types-smoke.ts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dsh-release-artifacts
           path: |

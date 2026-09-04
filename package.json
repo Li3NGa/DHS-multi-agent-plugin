@@ -30,7 +30,8 @@
     "release:check": "node scripts/check-npm-release.mjs",
     "release:contract": "node scripts/check-release-contract.mjs",
     "api:check": "node scripts/check-public-api.mjs",
-    "surface:check": "node scripts/check-public-surface.mjs"
+    "surface:check": "node scripts/check-public-surface.mjs",
+    "actions:check": "node scripts/check-actions-runtime.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

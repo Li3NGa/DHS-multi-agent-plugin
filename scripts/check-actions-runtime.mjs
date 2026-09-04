@@ -29,15 +29,17 @@ const seen = new Map()
 for (const name of entries) {
   const content = await readFile(join(workflowDir, name), 'utf8')
   for (const rawLine of content.split(/\r?\n/)) {
-    const match = rawLine.match(/^\s*(?:uses:\s*)?([^\s#]+)?\s*$/)
+    const match = rawLine.match(/^\s*-\s+uses:\s+([^\s#]+)/)
     if (!match?.[1]) continue
+
     const ref = match[1]
     const action = ref.match(/^([^@]+)@(v[^\s#]+)$/)
     if (!action) continue
-    const [, namePart, version] = action
-    const prior = seen.get(namePart) ?? []
+
+    const [, actionName, version] = action
+    const prior = seen.get(actionName) ?? []
     prior.push(`${name}:${version}`)
-    seen.set(namePart, prior)
+    seen.set(actionName, prior)
 
     if (forbidden.some(pattern => pattern.test(ref))) {
       violations.push(`${name}: deprecated Node 20 action reference ${ref}`)
@@ -48,7 +50,8 @@ for (const name of entries) {
 for (const [action, versions] of seen) {
   const expectedVersion = expected.get(action)
   if (!expectedVersion) continue
-  const actualVersions = [...new Set(versions.map(item => item.split(':').pop()))]
+
+  const actualVersions = [...new Set(versions.map(item => item.slice(item.lastIndexOf(':') + 1)))]
   if (actualVersions.length !== 1 || actualVersions[0] !== expectedVersion) {
     violations.push(`${action} must use ${expectedVersion}; found ${actualVersions.join(', ')}`)
   }

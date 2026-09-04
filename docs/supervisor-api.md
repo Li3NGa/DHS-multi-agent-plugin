@@ -3,7 +3,7 @@
 > Frozen Native Supervisor contract. Phase E1 defines the contract **only** —
 > there is no executable Supervisor yet (that is Phase E2). This document is the
 > single source of truth for what a Supervisor run must look like against the
-> frozen Runtime (`dsh-native/src`).
+> frozen Runtime (`packages/dsh-multi-agent/src`).
 
 ## Scope
 

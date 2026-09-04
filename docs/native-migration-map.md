@@ -1,10 +1,10 @@
 # Native Source Convergence Map
 
-The migration from `dsh-native/` to `packages/dsh-multi-agent/` is complete for the production Native source tree.
+The migration from `dsh-native/` to `packages/dsh-multi-agent/` is **complete**. The legacy `dsh-native/` tree has been retired and removed.
 
-## Authoritative mapping
+## Authoritative mapping (historical reference)
 
-| Historical tree | Production tree | Current role |
+| Historical tree | Production tree | Role transition |
 |---|---|---|
 | `dsh-native/src/**` | `packages/dsh-multi-agent/src/**` | Legacy verification snapshot → production source |
 | `dsh-native/tests/**` | `packages/dsh-multi-agent/tests/unit/**` | Historical tests → package unit tests |
@@ -42,25 +42,15 @@ The authoritative Native workflow is:
 
 The former independent `dsh-native` workflow has been retired. This prevents two TypeScript CI signals from testing different copies of the Native implementation.
 
-## Legacy snapshot
+## Retirement completed
 
-`dsh-native/` remains in the repository only until the final retirement gate is intentionally executed. The historical state is protected by:
+The legacy `dsh-native/` tree was retired and removed after all retirement gates were verified:
 
-```text
-dhs-root-native-final
-```
+- ✅ production build does not read `dsh-native/`
+- ✅ package tests do not import `dsh-native/`
+- ✅ Native CI references only `packages/dsh-multi-agent/`
+- ✅ root release entry is produced from the package source
+- ✅ real-DSH bundle and root-entry smoke pass without the legacy tree
+- ✅ package tarball/install succeeds without the legacy tree
 
-No new production code should be added under `dsh-native/`.
-
-## Final retirement gate
-
-Before deleting the legacy tree, verify all of the following on a clean checkout:
-
-- production build does not read `dsh-native/`
-- package tests do not import `dsh-native/`
-- Native CI references only `packages/dsh-multi-agent/`
-- root release entry is produced from the package source
-- real-DSH bundle and root-entry smoke pass without the legacy tree
-- package tarball/install succeeds without the legacy tree
-
-Deleting the legacy tree is a repository hygiene change, not a runtime redesign.
+The historical snapshot is preserved in git history under the `dhs-root-native-final` tag for audit purposes.

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This repository currently contains two production runtimes with different responsibilities:
+This repository contains two production runtimes with different responsibilities:
 
 - **Python Runtime**: `src/deepseek_multi_agent_plugin/`
 - **Native DSH Runtime**: `packages/dsh-multi-agent/`
@@ -17,33 +17,19 @@ For Native code, the production source of truth is:
 packages/dsh-multi-agent/src/
 ```
 
-The following tree is **legacy verification/snapshot material only**:
+This is the sole authoritative Native source tree. The historical `dsh-native/` verification snapshot has been retired (see `docs/native-migration-map.md`).
 
-```text
-dsh-native/
-```
+## Retirement completed (2026-09-04)
 
-It must not be used by the Native release pipeline, package exports, or production documentation.
+All retirement gates have been verified and the legacy `dsh-native/` tree has been removed:
 
-## Evidence for retirement
-
-The legacy tree is protected by the remote snapshot tag:
-
-```text
-dhs-root-native-final
-```
-
-Its retirement gate is:
-
-1. `packages/dsh-multi-agent` builds and typechecks independently.
-2. Unit, integration and real-DSH smoke suites run from the package source tree.
-3. The release entry at `dist/index.js` is built from `packages/dsh-multi-agent/src/index.ts`.
-4. `dsh plugin add` installation metadata points to the package-produced release artifact.
-5. Repository CI has exactly one authoritative Native runtime workflow.
-6. No production source, test, build script or documentation imports `dsh-native`.
-7. A clean checkout can install and load the Native package without the legacy tree.
-
-Until all gates are proven, `dsh-native/` must not be deleted or used as a second implementation.
+1. `packages/dsh-multi-agent` builds and typechecks independently. ✅
+2. Unit, integration and real-DSH smoke suites run from the package source tree. ✅
+3. The release entry at `dist/index.js` is built from `packages/dsh-multi-agent/src/index.ts`. ✅
+4. `dsh plugin add` installation metadata points to the package-produced release artifact. ✅
+5. Repository CI has exactly one authoritative Native runtime workflow (`native-runtime.yml`). ✅
+6. No production source, test, build script or documentation imports `dsh-native`. ✅
+7. A clean checkout can install and load the Native package without the legacy tree. ✅
 
 ## Release flow
 

@@ -10,7 +10,7 @@
 
 plugins:
   dsh-multi-agent:
-    $path: <repo>/dsh-native/dist/dsh.bundle.js
+    $path: <repo>/packages/dsh-multi-agent/dist/dsh.bundle.js
     # 可选配置
     # concurrency: 8          # scheduler 默认并发上限
     # defaultTimeoutMs: 60000 # 单任务默认超时（默认 60s）

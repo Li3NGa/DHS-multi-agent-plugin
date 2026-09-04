@@ -1,24 +1,4 @@
-/**
- * Native Plan Validator — Phase E3, semantics adjusted in Phase E4.
- *
- * Since Phase E4 the validator only JUDGES a PlannerPlan:
- *   - validate() is pure: it computes the full issue trail and throws
- *     PlanValidationError on hard structural errors. It NEVER mutates the
- *     plan any more.
- *   - validateAndRepair() keeps the historical behaviour for callers that
- *     explicitly opt in: it validates, then delegates the two semantically
- *     safe repairs (drop an unknown explicit agentId / drop unsupported
- *     requiredCapabilities) to the Repair layer
- *     (../recovery/repair.applyIssueRepairs). One implementation, no silent
- *     repair inside the validator.
- *
- * Hard errors (no safe repair) stay unchanged:
- *   - empty plan
- *   - duplicate / empty task id
- *   - missing prompt
- *   - self-dependency / unknown dependency
- *   - dependency cycle (iterative DFS, stack-safe on deep plans)
- */
+import { applyIssueRepairs } from '../recovery/repair'
 import { PlanValidationError } from './errors'
 import type {
   AgentDescriptor,
@@ -27,10 +7,8 @@ import type {
   PlannerPlan,
   ValidatedPlan,
 } from './types'
-import { applyIssueRepairs } from '../recovery/repair'
 
 export interface PlanValidatorDeps {
-  /** The routable agent pool used to judge explicit ids / capabilities. */
   readonly agents: readonly AgentDescriptor[]
 }
 
@@ -41,11 +19,6 @@ export class PlanValidator {
     this.#agents = deps.agents
   }
 
-  /**
-   * Pure validation: compute the issue trail and throw on hard errors.
-   * The input plan is never mutated; unknown-agent / unsupported-capability
-   * findings are reported as warnings and left for the Repair layer.
-   */
   validate(input: PlannerPlan): ValidatedPlan {
     const tasks = input.tasks
     if (tasks.length === 0) {
@@ -59,13 +32,11 @@ export class PlanValidator {
 
     const issues: PlanIssue[] = []
     let anyError = false
-
     const seenIds = new Set<string>()
     const idSet = new Set<string>(tasks.map((task) => task.id))
     const agentIds = new Set<string>(this.#agents.map((agent) => agent.id))
 
     for (const task of tasks) {
-      // --- id checks ---
       if (typeof task.id !== 'string' || task.id.length === 0) {
         issues.push({
           severity: 'error',
@@ -87,7 +58,6 @@ export class PlanValidator {
       }
       seenIds.add(task.id)
 
-      // --- prompt check ---
       if (typeof task.prompt !== 'string' || task.prompt.length === 0) {
         issues.push({
           severity: 'error',
@@ -99,7 +69,6 @@ export class PlanValidator {
         continue
       }
 
-      // --- dependency checks ---
       if (task.dependsOn !== undefined) {
         for (const dep of task.dependsOn) {
           if (dep === task.id) {
@@ -122,7 +91,6 @@ export class PlanValidator {
         }
       }
 
-      // --- agent / capability findings (warnings; Repair layer fixes them)
       if (task.agentId !== undefined && !agentIds.has(task.agentId)) {
         issues.push({
           severity: 'warning',
@@ -148,7 +116,6 @@ export class PlanValidator {
       }
     }
 
-    // --- cycle detection over the declared graph (iterative DFS) --------
     const cycle = findCycle(tasks)
     if (cycle.length > 0) {
       issues.push({
@@ -159,50 +126,38 @@ export class PlanValidator {
       anyError = true
     }
 
-    if (anyError) {
-      throw new PlanValidationError('plan failed validation', issues)
-    }
-
+    if (anyError) throw new PlanValidationError('plan failed validation', issues)
     return { plan: { tasks }, issues, repaired: false }
   }
 
-  /**
-   * Historical entry point: validate, then apply the Repair layer's safe
-   * fixes when the issue trail contains repairable findings. Behaviour is
-   * byte-compatible with the pre-E4 inline implementation.
-   */
   validateAndRepair(input: PlannerPlan): ValidatedPlan {
     const validated = this.validate(input)
     const repaired = applyIssueRepairs(validated.plan, validated.issues)
     if (repaired === undefined) return validated
-    return {
-      plan: repaired.plan,
-      issues: validated.issues,
-      repaired: true,
-    }
+    return { plan: repaired.plan, issues: validated.issues, repaired: true }
   }
 }
 
-/** Iterative depth-first cycle search (stack-safe for deep plans). */
 function findCycle(tasks: readonly PlanTask[]): string[] {
   const byId = new Map<string, PlanTask>()
   for (const task of tasks) byId.set(task.id, task)
 
   const color = new Map<string, number>()
-  for (const task of tasks) color.set(task.id, 0) // 0 white | 1 gray | 2 black
+  for (const task of tasks) color.set(task.id, 0)
 
   for (const root of tasks) {
     if (color.get(root.id) !== 0) continue
     const stack: { id: string; iter: number }[] = [{ id: root.id, iter: 0 }]
     const path: string[] = [root.id]
     color.set(root.id, 1)
+
     while (stack.length > 0) {
       const frame = stack[stack.length - 1]!
       const deps = byId.get(frame.id)?.dependsOn ?? []
       if (frame.iter < deps.length) {
         const dep = deps[frame.iter]!
         frame.iter += 1
-        if (dep === frame.id) continue // self-dep reported separately
+        if (dep === frame.id) continue
         const depColor = color.get(dep) ?? 2
         if (depColor === 1) {
           const start = path.indexOf(dep)
@@ -223,7 +178,6 @@ function findCycle(tasks: readonly PlanTask[]): string[] {
   return []
 }
 
-/** Convenience factory. */
 export function createPlanValidator(deps: PlanValidatorDeps): PlanValidator {
   return new PlanValidator(deps)
 }

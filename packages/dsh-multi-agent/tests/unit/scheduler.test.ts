@@ -237,6 +237,24 @@ describe('Scheduler', () => {
     expect(report.ok).toBe(true)
   })
 
+  it('rejects reuse of a previously scheduled graph before executing again', async () => {
+    const graph = new TaskGraph()
+    graph.add({ id: 'a', agentId: 'w', prompt: 'p' })
+    let calls = 0
+    const scheduler = new Scheduler(async (task) => {
+      calls += 1
+      return outcome(task.id)
+    })
+
+    await scheduler.run(graph)
+    expect(calls).toBe(1)
+    expect(graph.get('a')?.status).toBe('completed')
+
+    await expect(scheduler.run(graph)).rejects.toThrow(/cannot be reused after scheduling/)
+    expect(calls).toBe(1)
+    expect(graph.get('a')?.status).toBe('completed')
+  })
+
   it('rejects invalid graphs and concurrent scheduler runs', async () => {
     const invalid = new TaskGraph()
     invalid.add({ id: 'a', agentId: 'w', prompt: 'p', dependsOn: ['ghost'] })

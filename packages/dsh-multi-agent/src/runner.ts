@@ -118,15 +118,25 @@ export class AgentRunner {
         )
         if (timeoutMs !== undefined) {
           timer = setTimeout(() => {
-            agent.cancel(cause)
-            settle(false)
+            try {
+              agent.cancel(cause)
+            } catch {
+              // Cancellation is best-effort; outcome is derived from the log state.
+            } finally {
+              settle(false)
+            }
           }, timeoutMs)
         }
         if (signal) {
           onAbort = () => {
             signalCancelled = true
-            agent.cancel(cause)
-            settle(false)
+            try {
+              agent.cancel(cause)
+            } catch {
+              // Cancellation is best-effort; preserve the cancellation outcome.
+            } finally {
+              settle(false)
+            }
           }
           signal.addEventListener('abort', onAbort, { once: true })
         }
@@ -148,6 +158,15 @@ export class AgentRunner {
         timedOut: !converged && !signalCancelled && signal?.aborted !== true,
         durationMs: Date.now() - startedAt,
       })
+    } catch (error) {
+      return {
+        taskId: task.id,
+        status: 'failed',
+        text: undefined,
+        error: errorMessage(error),
+        durationMs: Date.now() - startedAt,
+        raw: undefined,
+      }
     } finally {
       if (timer !== undefined) clearTimeout(timer)
       if (signal && onAbort !== undefined) signal.removeEventListener('abort', onAbort)

@@ -2,10 +2,10 @@
  * Retry Policy coverage plus R5 cancellation semantics.
  */
 import { describe, expect, it } from 'vitest'
-import type { TaskExecute, Task } from '../src'
+import type { TaskExecute, Task } from '../../src'
 import { okOutcome } from './helpers'
-import { createRecoveryManager, delay, RetryPolicy } from '../src/recovery'
-import { createSupervisor } from '../src/supervisor'
+import { createRecoveryManager, delay, RetryPolicy } from '../../src/recovery'
+import { createSupervisor } from '../../src/supervisor'
 
 const PLAN = { tasks: [{ id: 't1', prompt: 'p' }] }
 

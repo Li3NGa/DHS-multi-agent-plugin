@@ -2,14 +2,14 @@
  * Phase E4 — Replan V1 (scenarios 9-12).
  */
 import { describe, expect, it } from 'vitest'
-import type { TaskExecute, Task } from '../src'
+import type { TaskExecute, Task } from '../../src'
 import { okOutcome } from './helpers'
-import { deterministicReplan } from '../src/recovery/replanner'
-import { createRecoveryManager, RetryPolicy } from '../src/recovery'
-import { AgentRouter } from '../src/planner/router'
-import { PlanValidator } from '../src/planner/validator'
-import { createSupervisor } from '../src/supervisor'
-import type { FailureRecord } from '../src/recovery'
+import { deterministicReplan } from '../../src/recovery/replanner'
+import { createRecoveryManager, RetryPolicy } from '../../src/recovery'
+import { AgentRouter } from '../../src/planner/router'
+import { PlanValidator } from '../../src/planner/validator'
+import { createSupervisor } from '../../src/supervisor'
+import type { FailureRecord } from '../../src/recovery'
 
 const AGENTS = [{ id: 'x', capabilities: [] }, { id: 'y', capabilities: [] }]
 

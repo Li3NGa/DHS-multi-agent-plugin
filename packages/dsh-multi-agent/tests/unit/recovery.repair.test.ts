@@ -2,12 +2,12 @@
  * Phase E4 — Repair V1 (scenarios 6, 7, 8).
  */
 import { describe, expect, it } from 'vitest'
-import type { TaskExecute, Task } from '../src'
+import type { TaskExecute, Task } from '../../src'
 import { okOutcome } from './helpers'
-import { applyIssueRepairs, clearAgentAssignments } from '../src/recovery/repair'
-import { createRecoveryManager } from '../src/recovery'
-import { PlanValidator } from '../src/planner/validator'
-import { createSupervisor } from '../src/supervisor'
+import { applyIssueRepairs, clearAgentAssignments } from '../../src/recovery/repair'
+import { createRecoveryManager } from '../../src/recovery'
+import { PlanValidator } from '../../src/planner/validator'
+import { createSupervisor } from '../../src/supervisor'
 
 describe('applyIssueRepairs (validator repair migrated here)', () => {
   it('drops an unknown explicit agent (scenario 6)', () => {

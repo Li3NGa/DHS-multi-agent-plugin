@@ -7,10 +7,10 @@ import {
   SupervisorExecutionError,
   SupervisorTimeoutError,
   SupervisorValidationError,
-} from '../src/supervisor'
-import { PlanRoutingError } from '../src/planner/errors'
-import { classifyResult, classifyThrown, RECOVERABILITY } from '../src/recovery/failure'
-import type { SupervisorRunResult } from '../src/supervisor'
+} from '../../src/supervisor'
+import { PlanRoutingError } from '../../src/planner/errors'
+import { classifyResult, classifyThrown, RECOVERABILITY } from '../../src/recovery/failure'
+import type { SupervisorRunResult } from '../../src/supervisor'
 
 function broadcastResult(entries: Record<string, unknown>[]): SupervisorRunResult {
   return {

@@ -22,11 +22,11 @@
  * packages/dsh-multi-agent/src; the bridge is test-only.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { AgentRunner } from '../src/runner'
-import type { TaskExecute } from '../src/scheduler'
-import { createSupervisor } from '../src/supervisor'
-import { createPlanner, planAndRun } from '../src/planner'
-import type { AgentDescriptor, SupervisorRunResult } from '../src/index'
+import { AgentRunner } from '../../src/runner'
+import type { TaskExecute } from '../../src/scheduler'
+import { createSupervisor } from '../../src/supervisor'
+import { createPlanner, planAndRun } from '../../src/planner'
+import type { AgentDescriptor, SupervisorRunResult } from '../../src/index'
 import { bootHarness, realAgent, ScriptedAdapter } from './support'
 
 const adapter = new ScriptedAdapter(['echo'], 'echo')

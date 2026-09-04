@@ -18,10 +18,10 @@ import {
   planAndRun,
   routedPlanToSupervisorPlan,
   topologicalOrder,
-} from '../src/planner'
-import { createSupervisor } from '../src/supervisor'
-import type { AgentDescriptor, PlanTask, RoutedTask } from '../src/planner'
-import type { TaskExecute } from '../src/scheduler'
+} from '../../src/planner'
+import { createSupervisor } from '../../src/supervisor'
+import type { AgentDescriptor, PlanTask, RoutedTask } from '../../src/planner'
+import type { TaskExecute } from '../../src/scheduler'
 
 const POOL: readonly AgentDescriptor[] = [
   { id: 'writer', capabilities: ['write'] },

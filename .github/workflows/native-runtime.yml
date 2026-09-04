@@ -16,6 +16,7 @@ on:
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
       - "scripts/check-actions-runtime.mjs"
+      - "scripts/check-release-candidate.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -32,6 +33,7 @@ on:
       - "scripts/check-public-api.mjs"
       - "scripts/check-public-surface.mjs"
       - "scripts/check-actions-runtime.mjs"
+      - "scripts/check-release-candidate.mjs"
       - "scripts/patch-native-declarations.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -70,6 +72,8 @@ jobs:
         run: pnpm --dir packages/dsh-multi-agent build
       - name: Build root release entry + real-DSH smoke
         run: pnpm test:smoke
+      - name: Release candidate gate
+        run: pnpm release:rc
       - name: Validate release metadata
         run: pnpm release:check "npm-v$(node -p "require('./package.json').version")"
       - name: Validate release contract

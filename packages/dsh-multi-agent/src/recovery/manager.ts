@@ -1,17 +1,16 @@
+import { observe, type RuntimeObserver } from '../observability'
 import { AgentRouter, PlanValidator, planToSupervisorInput, topologicalOrder } from '../planner'
 import type { AgentDescriptor, PlannerPlan, PlanExecutionStrategy, RoutedPlan, RoutedTask } from '../planner/types'
 import type { Supervisor, SupervisorRunResult } from '../supervisor'
 import type {
   FailureRecord,
   RecoveryDecision,
-  RecoveryExecutionContext,
   RecoveryPolicyOptions,
   RecoveryRunOptions,
   RecoveryRunResult,
 } from './types'
-import { observe, type RuntimeObserver } from '../observability'
 import { RetryPolicy, delay } from './retry-policy'
-import { classifyResult, classifyThrown, extractCompletedTaskIds } from './failure'
+import { classifyResult, classifyThrown } from './failure'
 import { clearAgentAssignments } from './repair'
 import { deterministicReplan } from './replanner'
 
@@ -87,13 +86,12 @@ export class RecoveryManager {
     let replansUsed = 0
     let lastResult: SupervisorRunResult | undefined
     const strategy = options.strategy ?? 'sequential'
-    const logicalPlanId = planId(plan)
 
     observe(this.#observer, {
       type: 'recovery.started',
       at: new Date().toISOString(),
       runId: options.runId,
-      planId: logicalPlanId,
+      planId: planId(plan),
     })
 
     const recordDecision = (decision: RecoveryDecision): void => {
@@ -147,11 +145,11 @@ export class RecoveryManager {
 
     while (true) {
       if (options.signal?.aborted) return finish('cancelled', 'abort')
-
       if (!this.#policy.canAttempt(attempts + 1)) {
         const exhaustedCode = failures[failures.length - 1]?.code
         return finish(exhaustedCode === 'TIMEOUT' ? 'timeout' : 'failed', 'failed')
       }
+
       attempts += 1
       const attempt = attempts
       observe(this.#observer, {
@@ -163,8 +161,7 @@ export class RecoveryManager {
 
       let validatedPlan: PlannerPlan
       try {
-        const validator = new PlanValidator({ agents: pool })
-        validatedPlan = validator.validateAndRepair(currentPlan).plan
+        validatedPlan = new PlanValidator({ agents: pool }).validateAndRepair(currentPlan).plan
       } catch (error) {
         recordFailure(classifyThrown(error, attempt))
         return finish('failed', 'failed')
@@ -177,19 +174,6 @@ export class RecoveryManager {
         recordFailure(classifyThrown(error, attempt))
         return finish('failed', 'failed')
       }
-
-      const completedIds = lastResult !== undefined ? extractCompletedTaskIds(lastResult) : []
-      const lastFailure = failures[failures.length - 1]
-      const context: RecoveryExecutionContext = {
-        runId: options.runId,
-        planId: planId(validatedPlan),
-        attempt,
-        completedTaskIds: completedIds,
-        failedTaskIds: (lastFailure?.taskFailures ?? []).map((ref) => ref.taskId),
-        previousFailures: [...failures],
-        availableAgents: pool,
-      }
-      void context
 
       let result: SupervisorRunResult
       try {
